@@ -116,14 +116,14 @@ validation and replay.
 
 **Blocked by:** Generate a state-changing push-and-trigger puzzle.
 
-- [ ] Interpret move_toward as one traversable shortest-path step with fixed UP, RIGHT, DOWN, LEFT tie breaking.
-- [ ] Treat no path for move_toward as a deterministic no-op.
-- [ ] Run autonomous generated rules after applicable and inapplicable well-formed action attempts.
-- [ ] Check generated failures after automatic rules and before objective completion.
-- [ ] Make failure win when failure and final success become true in the same turn.
-- [ ] Reject a proposed solution that triggers any generated failure predicate.
-- [ ] Render autonomous entity movement and record it separately from the acting action's direct effects.
-- [ ] Prove a generated pursuit environment without adding ghost, enemy, hazard, or chase branches to the runtime.
+- [x] Interpret move_toward as one traversable shortest-path step with fixed UP, RIGHT, DOWN, LEFT tie breaking.
+- [x] Treat no path for move_toward as a deterministic no-op.
+- [x] Run autonomous generated rules after applicable and inapplicable well-formed action attempts.
+- [x] Check generated failures after automatic rules and before objective completion.
+- [x] Make failure win when failure and final success become true in the same turn.
+- [x] Reject a proposed solution that triggers any generated failure predicate.
+- [x] Render autonomous entity movement and record it separately from the acting action's direct effects.
+- [x] Prove a generated pursuit environment without adding ghost, enemy, hazard, or chase branches to the runtime.
 
 
 
