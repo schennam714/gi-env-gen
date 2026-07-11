@@ -133,14 +133,14 @@ validation and replay.
 
 **Blocked by:** Generate a state-changing push-and-trigger puzzle.
 
-- [ ] Load declared global scalar values into runtime state.
-- [ ] Interpret set_value and change_value with numeric type checks.
-- [ ] Interpret eq, ne, lt, lte, gt, and gte value comparisons.
-- [ ] Expose current generated values in every acting observation.
-- [ ] Let generated after-action rules update values after inapplicable action attempts.
-- [ ] Replay a generated time-limited solution that succeeds before its generated failure condition.
-- [ ] Reject value operations with unknown values, incompatible types, or invalid parameter references.
-- [ ] Prove the feature without adding oxygen, timer, health, battery, or resource branches to the runtime.
+- [x] Load declared global scalar values into runtime state.
+- [x] Interpret set_value and change_value with numeric type checks.
+- [x] Interpret eq, ne, lt, lte, gt, and gte value comparisons.
+- [x] Expose current generated values in every acting observation.
+- [x] Let generated after-action rules update values after inapplicable action attempts.
+- [x] Replay a generated time-limited solution that succeeds before its generated failure condition.
+- [x] Reject value operations with unknown values, incompatible types, or invalid parameter references.
+- [x] Prove the feature without adding oxygen, timer, health, battery, or resource branches to the runtime.
 
 
 
