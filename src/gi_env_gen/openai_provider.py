@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any
 
+from .builder import BuildRequest
 from .model import JsonObject
 
 DEFAULT_MODEL = "gpt-5.6"
@@ -36,6 +37,11 @@ name>:<uppercase direction>}}. Supply a solution that deterministically reaches
 success. No objective may be true initially. If the request cannot be represented
 exactly, return unsupported; do not approximate. Interpretation is visible, fallible
 model judgment.
+
+The input is a complete stateless build request. On repair, preserve
+frozen_interpretation exactly, inspect the complete previous_response and diagnostics,
+and return a complete replacement response. Never omit unchanged fields or silently
+alter the prompt, map geometry, or rules to evade an error.
 """
 
 ACTOR_INSTRUCTIONS = """You are the acting policy in a frozen deterministic 2D world.
@@ -63,8 +69,14 @@ class OpenAIProvider:
         self._client = client
         self._model = model
 
-    def generate_build(self, prompt: str) -> JsonObject:
-        return self._json_response(BUILDER_INSTRUCTIONS, prompt)
+    def generate_build(self, request: BuildRequest) -> JsonObject:
+        payload = {
+            "original_prompt": request.original_prompt,
+            "frozen_interpretation": request.frozen_interpretation,
+            "previous_response": request.previous_response,
+            "diagnostics": [diagnostic.__dict__ for diagnostic in request.diagnostics],
+        }
+        return self._json_response(BUILDER_INSTRUCTIONS, json.dumps(payload, sort_keys=True))
 
     def choose_action(self, observation: JsonObject) -> JsonObject:
         return self._json_response(ACTOR_INSTRUCTIONS, json.dumps(observation, sort_keys=True))

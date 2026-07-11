@@ -5,7 +5,7 @@ import json
 from typing import Sequence
 
 from .acting import play
-from .builder import AcceptedBuild, GenerationFailed, UnsupportedBuild, build
+from .builder import AcceptedBuild, GenerationFailed, ProviderFailed, UnsupportedBuild, build
 from .openai_provider import DEFAULT_MODEL, MissingCredential, OpenAIProvider
 from .runtime import start
 
@@ -22,8 +22,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(error))
     result = build(args.prompt, provider)
     if isinstance(result, UnsupportedBuild):
+        print("Interpretation:")
+        for item in result.interpretation:
+            print(f"- {item}")
         print("Unsupported:", result.reason)
         return 2
+    if isinstance(result, ProviderFailed):
+        print("Builder provider failure:", result.reason)
+        return 5
     if isinstance(result, GenerationFailed):
         print("Generated program rejected:")
         print(json.dumps([item.__dict__ for item in result.diagnostics], indent=2))
@@ -46,4 +52,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

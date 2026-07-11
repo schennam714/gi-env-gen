@@ -19,6 +19,13 @@ mypy src
 Tests use clearly identified provider fakes. They do not present fixtures as fresh
 generated output.
 
+Rejected programs receive path-specific deterministic diagnostics in a stateless
+repair request containing the original prompt and complete prior response. The first
+structurally valid interpretation is frozen, and generation stops after three rejected
+candidates. A valid `unsupported` response stops immediately and is shown with the
+builder's interpretation and reason; the harness does not approximate the request or
+repair generated geometry and rules itself.
+
 ## Credentialed smoke path
 
 Set an API key and submit a freeform prompt:

@@ -8,7 +8,7 @@ from .runtime import EnvironmentProgramError, Transition, _condition, start, ste
 
 
 class BuilderProvider(Protocol):
-    def generate_build(self, prompt: str) -> JsonObject: ...
+    def generate_build(self, request: BuildRequest) -> JsonObject: ...
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,20 @@ class Diagnostic:
     code: str
     path: str
     message: str
+
+
+@dataclass(frozen=True)
+class BuildRequest:
+    original_prompt: str
+    frozen_interpretation: tuple[str, ...] | None
+    previous_response: JsonObject | None
+    diagnostics: tuple[Diagnostic, ...]
+
+
+@dataclass(frozen=True)
+class BuildAttempt:
+    response: JsonObject
+    diagnostics: tuple[Diagnostic, ...]
 
 
 @dataclass(frozen=True)
@@ -30,41 +44,90 @@ class AcceptedBuild:
     interpretation: tuple[str, ...]
     environment: FrozenEnvironment
     validation: ValidationEvidence
+    attempts: tuple[BuildAttempt, ...]
 
 
 @dataclass(frozen=True)
 class UnsupportedBuild:
     interpretation: tuple[str, ...]
     reason: str
+    attempts: tuple[BuildAttempt, ...]
 
 
 @dataclass(frozen=True)
 class GenerationFailed:
+    reason: str
     diagnostics: tuple[Diagnostic, ...]
+    attempts: tuple[BuildAttempt, ...]
 
 
-BuildResult = AcceptedBuild | UnsupportedBuild | GenerationFailed
+@dataclass(frozen=True)
+class ProviderFailed:
+    reason: str
+    attempts: tuple[BuildAttempt, ...]
+
+
+BuildResult = AcceptedBuild | UnsupportedBuild | GenerationFailed | ProviderFailed
 
 
 def build(prompt: str, provider: BuilderProvider) -> BuildResult:
-    response = provider.generate_build(prompt)
+    attempts: list[BuildAttempt] = []
+    frozen_interpretation: tuple[str, ...] | None = None
+    previous_response: JsonObject | None = None
+    diagnostics: tuple[Diagnostic, ...] = ()
+    for _ in range(3):
+        request = BuildRequest(prompt, frozen_interpretation, previous_response, diagnostics)
+        try:
+            response = provider.generate_build(request)
+        except Exception as error:
+            return ProviderFailed(str(error), tuple(attempts))
+        result = _validate_response(response, frozen_interpretation)
+        if isinstance(result, UnsupportedBuild):
+            attempt = BuildAttempt(response, ())
+            return UnsupportedBuild(result.interpretation, result.reason, (*attempts, attempt))
+        if isinstance(result, AcceptedBuild):
+            attempt = BuildAttempt(response, ())
+            return AcceptedBuild(result.interpretation, result.environment, result.validation, (*attempts, attempt))
+        assert isinstance(result, GenerationFailed)
+        diagnostics = result.diagnostics
+        attempts.append(BuildAttempt(response, diagnostics))
+        previous_response = response
+        if frozen_interpretation is None and _generated_shape_is_valid(response):
+            frozen_interpretation = tuple(response["interpretation"])
+    return GenerationFailed("retry_exhausted", diagnostics, tuple(attempts))
+
+
+def _validate_response(
+    response: JsonObject, frozen_interpretation: tuple[str, ...] | None
+) -> BuildResult:
     if response.get("status") == "unsupported":
-        if set(response) == {"status", "interpretation", "reason"} and _strings(response.get("interpretation")) and isinstance(response.get("reason"), str):
-            return UnsupportedBuild(tuple(response["interpretation"]), response["reason"])
-        return _failure("shape", "INVALID_UNSUPPORTED_RESPONSE", "$", "Invalid unsupported response.")
+        required = {"status", "interpretation", "reason"}
+        if set(response) != required:
+            return _field_diagnostic(response, required, "", code="INVALID_UNSUPPORTED_RESPONSE")
+        if not _strings(response.get("interpretation")):
+            return _failure("shape", "INVALID_UNSUPPORTED_RESPONSE", "interpretation", "Expected an array of strings.")
+        if not isinstance(response.get("reason"), str):
+            return _failure("shape", "INVALID_UNSUPPORTED_RESPONSE", "reason", "Expected a string.")
+        if frozen_interpretation is not None and tuple(response["interpretation"]) != frozen_interpretation:
+            return _interpretation_drift()
+        return UnsupportedBuild(tuple(response["interpretation"]), response["reason"], ())
     if response.get("status") != "generated":
         return _failure("shape", "INVALID_BUILD_RESPONSE", "status", "Expected generated or unsupported.")
     if set(response) != {"status", "interpretation", "environment", "solution"}:
-        return _failure("shape", "INVALID_BUILD_RESPONSE", "$", "Generated response has unexpected or missing fields.")
+        return _field_diagnostic(response, {"status", "interpretation", "environment", "solution"}, "")
     if not _strings(response.get("interpretation")):
         return _failure("shape", "INVALID_INTERPRETATION", "interpretation", "Expected non-empty strings.")
+    if frozen_interpretation is not None and tuple(response["interpretation"]) != frozen_interpretation:
+        return _interpretation_drift()
     environment = response.get("environment")
     solution = response.get("solution")
-    if not isinstance(environment, dict) or not isinstance(solution, list):
-        return _failure("shape", "INVALID_BUILD_RESPONSE", "$", "Missing environment or solution.")
+    if not isinstance(environment, dict):
+        return _failure("shape", "INVALID_BUILD_RESPONSE", "environment", "Environment must be an object.")
+    if not isinstance(solution, list):
+        return _failure("shape", "INVALID_BUILD_RESPONSE", "solution", "Solution must be an array.")
     diagnostic = _validate_minimal_program(environment)
     if diagnostic is not None:
-        return GenerationFailed((diagnostic,))
+        return GenerationFailed("validation_rejected", (diagnostic,), ())
     frozen = freeze_environment(environment)
     initial = start(frozen)
     for index, objective in enumerate(environment["objectives"]):
@@ -77,20 +140,20 @@ def build(prompt: str, provider: BuilderProvider) -> BuildResult:
             )
     replay: list[Transition] = []
     state = initial.state
-    try:
-        for index, invocation in enumerate(solution):
+    for index, invocation in enumerate(solution):
+        try:
             transition = step(frozen, state, invocation)
-            if not transition.applicable:
-                return _failure(
-                    "solution_replay",
-                    "ACTION_INAPPLICABLE",
-                    f"solution[{index}]",
-                    "Proposed solution action was inapplicable.",
-                )
-            replay.append(transition)
-            state = transition.state
-    except (KeyError, TypeError, EnvironmentProgramError) as error:
-        return _failure("solution_replay", "INVALID_SOLUTION", "solution", str(error))
+        except (KeyError, TypeError, EnvironmentProgramError) as error:
+            return _failure("solution_replay", "INVALID_SOLUTION", f"solution[{index}]", str(error))
+        if not transition.applicable:
+            return _failure(
+                "solution_replay",
+                "ACTION_INAPPLICABLE",
+                f"solution[{index}]",
+                "Proposed solution action was inapplicable.",
+            )
+        replay.append(transition)
+        state = transition.state
     if state.status != "success":
         return _failure(
             "solution_replay",
@@ -102,13 +165,15 @@ def build(prompt: str, provider: BuilderProvider) -> BuildResult:
         tuple(response["interpretation"]),
         frozen,
         ValidationEvidence(tuple(dict(item) for item in solution), tuple(replay)),
+        (),
     )
 
 
 def _validate_minimal_program(program: JsonObject) -> Diagnostic | None:
     required = {"actor", "map", "legend", "values", "actions", "after_action", "objectives", "failures"}
     if set(program) != required:
-        return Diagnostic("shape", "INVALID_ENVIRONMENT_SHAPE", "environment", "Unexpected or missing fields.")
+        failure = _field_diagnostic(program, required, "environment.")
+        return Diagnostic("shape", "INVALID_ENVIRONMENT_SHAPE", failure.diagnostics[0].path, "Unexpected or missing field.")
     rows = program["map"]
     if not isinstance(rows, list) or not rows or not all(isinstance(row, str) and row for row in rows):
         return Diagnostic("shape", "INVALID_MAP", "environment.map", "Map rows must be non-empty strings.")
@@ -151,14 +216,15 @@ def _validate_minimal_program(program: JsonObject) -> Diagnostic | None:
             return Diagnostic("shape", "INVALID_PARAMETERS", path + ".parameters", "Minimal actions accept direction parameters only.")
         if not isinstance(action["allowed_when"], list) or not isinstance(action["effects"], list):
             return Diagnostic("shape", "INVALID_ACTION_RULES", path, "Conditions and effects must be arrays.")
-        for condition in action["allowed_when"]:
-            error = _validate_condition(condition, ids, set(parameters), path + ".allowed_when")
+        for condition_index, condition in enumerate(action["allowed_when"]):
+            error = _validate_condition(condition, ids, set(parameters), f"{path}.allowed_when[{condition_index}]")
             if error:
                 return error
-        for effect in action["effects"]:
+        for effect_index, effect in enumerate(action["effects"]):
+            effect_path = f"{path}.effects[{effect_index}]"
             if not isinstance(effect, dict) or effect.get("operation") != "move" or set(effect) != {"operation", "entity", "direction"}:
-                return Diagnostic("shape", "INVALID_EFFECT", path + ".effects", "Only the generic move effect is supported.")
-            error = _validate_entity_and_direction(effect, ids, set(parameters), path + ".effects")
+                return Diagnostic("shape", "INVALID_EFFECT", effect_path, "Only the generic move effect is supported.")
+            error = _validate_entity_and_direction(effect, ids, set(parameters), effect_path)
             if error:
                 return error
     if not isinstance(program["objectives"], list) or not program["objectives"]:
@@ -212,4 +278,33 @@ def _printable_ascii(value: Any) -> bool:
 
 
 def _failure(phase: str, code: str, path: str, message: str) -> GenerationFailed:
-    return GenerationFailed((Diagnostic(phase, code, path, message),))
+    return GenerationFailed("validation_rejected", (Diagnostic(phase, code, path, message),), ())
+
+
+def _interpretation_drift() -> GenerationFailed:
+    return _failure(
+        "shape",
+        "INTERPRETATION_DRIFT",
+        "interpretation",
+        "Repair attempts must preserve the first structurally valid interpretation exactly.",
+    )
+
+
+def _field_diagnostic(
+    value: Mapping[str, Any], required: set[str], prefix: str, *, code: str = "INVALID_BUILD_RESPONSE"
+) -> GenerationFailed:
+    missing = sorted(required - set(value))
+    field = missing[0] if missing else sorted(set(value) - required)[0]
+    return _failure("shape", code, prefix + field, "Unexpected or missing field.")
+
+
+def _generated_shape_is_valid(response: JsonObject) -> bool:
+    if response.get("status") != "generated" or set(response) != {"status", "interpretation", "environment", "solution"}:
+        return False
+    if not _strings(response.get("interpretation")):
+        return False
+    environment = response.get("environment")
+    if not isinstance(environment, dict) or not isinstance(response.get("solution"), list):
+        return False
+    diagnostic = _validate_minimal_program(environment)
+    return diagnostic is None or diagnostic.phase != "shape"
