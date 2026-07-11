@@ -106,6 +106,7 @@ validation and replay.
 - [x] Keep operation semantics in instructions without duplicating the full schema.
 - [x] Exercise every currently supported operation form through the shared schema boundary.
 - [x] Measure live first-attempt, repaired, unsupported, exhausted, and provider-failure rates across supported vocabulary slices.
+- [x] Optionally emit complete live schemas, structured responses, local schema results, and private validation replay without exposing that evidence to acting.
 
 
 

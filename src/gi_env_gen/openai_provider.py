@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from .builder import BuildRequest, CandidateRejected, Diagnostic
 from .model import JsonObject
@@ -72,10 +74,24 @@ class MissingCredential(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class StructuredResponseTrace:
+    name: str
+    schema: JsonObject
+    output: JsonObject | None
+    error: str | None = None
+
+
 class OpenAIProvider:
     """One provider adapter used for stateless builder and acting calls."""
 
-    def __init__(self, *, model: str = DEFAULT_MODEL, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_MODEL,
+        client: Any | None = None,
+        structured_response_observer: Callable[[StructuredResponseTrace], None] | None = None,
+    ) -> None:
         if client is None:
             if not os.environ.get("OPENAI_API_KEY"):
                 raise MissingCredential("OPENAI_API_KEY is required for live generation and acting")
@@ -84,6 +100,7 @@ class OpenAIProvider:
             client = OpenAI()
         self._client = client
         self._model = model
+        self._structured_response_observer = structured_response_observer
 
     def generate_build(self, request: BuildRequest) -> JsonObject:
         payload = {
@@ -128,21 +145,42 @@ class OpenAIProvider:
         name: str,
         schema: JsonObject,
     ) -> JsonObject:
-        response = self._client.responses.create(
-            model=self._model,
-            instructions=instructions,
-            input=input_text,
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": name,
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-            store=False,
-        )
-        return self._decoded_object(response.output_text)
+        try:
+            response = self._client.responses.create(
+                model=self._model,
+                instructions=instructions,
+                input=input_text,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": name,
+                        "strict": True,
+                        "schema": schema,
+                    }
+                },
+                store=False,
+            )
+            output = self._decoded_object(response.output_text)
+        except Exception as error:
+            if self._structured_response_observer is not None:
+                self._structured_response_observer(
+                    StructuredResponseTrace(
+                        name,
+                        copy.deepcopy(schema),
+                        None,
+                        str(error),
+                    )
+                )
+            raise
+        if self._structured_response_observer is not None:
+            self._structured_response_observer(
+                StructuredResponseTrace(
+                    name,
+                    copy.deepcopy(schema),
+                    copy.deepcopy(output),
+                )
+            )
+        return output
 
     def _json_response(self, instructions: str, input_text: str) -> JsonObject:
         response = self._client.responses.create(

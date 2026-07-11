@@ -61,6 +61,19 @@ The JSON report separates first-attempt acceptance, repaired acceptance, unsuppo
 retry exhaustion, and provider failure. It is live generation evidence and is distinct
 from the offline provider fixtures.
 
+Add `--trace` to include the complete strict schema and decoded output for every
+physical builder call, local JSON Schema errors, complete build attempts and
+diagnostics, the frozen environment hash, and private proposed-solution replay:
+
+```sh
+uv run python scripts/smoke_builder_matrix.py --case bounded_repeat --trace
+```
+
+Trace mode exits nonzero if any captured response fails its exact local schema check.
+The trace is local validation evidence: its proposed solution remains under the
+`private_validation_evidence` field and is never sent to the acting LLM. Compact mode
+remains the default for repeated reliability measurements.
+
 The `gpt-5.6` smoke run on 2026-07-11 accepted reach, push/trigger, and bounded-repeat
 cases on their first logical attempt and accepted possession/prerequisite after one
 repair: first-attempt `3/4` (`0.75`), repaired `1/4` (`0.25`), unsupported `0`,

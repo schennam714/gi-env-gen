@@ -7,10 +7,10 @@ name = "gi-env-gen"
 version = "0.1.0"
 description = "LLM-authored deterministic 2D environment harness"
 requires-python = ">=3.11"
-dependencies = ["openai>=1.30"]
+dependencies = ["jsonschema>=4.22", "openai>=1.30"]
 
 [project.optional-dependencies]
-dev = ["jsonschema>=4.22", "mypy>=1.10", "pytest>=8"]
+dev = ["mypy>=1.10", "pytest>=8", "types-jsonschema>=4.22"]
 
 [project.scripts]
 gi-env-gen = "gi_env_gen.cli:main"
@@ -26,4 +26,3 @@ testpaths = ["tests"]
 python_version = "3.11"
 strict = true
 packages = ["gi_env_gen"]
-

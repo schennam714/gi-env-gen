@@ -3,6 +3,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from gi_env_gen.builder import AcceptedBuild, BuildRequest, Diagnostic, build
@@ -35,6 +36,11 @@ class FakeResponses:
             "arguments": {"heading": "RIGHT"},
         }
         return SimpleNamespace(output_text=json.dumps(output))
+
+
+class FailingResponses:
+    def create(self, **request: Any) -> SimpleNamespace:
+        raise RuntimeError("simulated provider failure")
 
 
 def test_json_mode_is_declared_in_the_request_input() -> None:
@@ -78,6 +84,44 @@ def test_builder_sends_complete_stateless_repair_context() -> None:
     assert build_format["name"] == "generated_build_response"
     assert build_format["strict"] is True
     assert build_format["schema"] == build_response_schema(manifest_from_generated(response))
+
+
+def test_builder_can_observe_complete_structured_response_evidence() -> None:
+    response = reach_build_response()
+    manifest = manifest_from_generated(response)
+    responses = FakeResponses(manifest, response)
+    observed: list[Any] = []
+    provider = OpenAIProvider(
+        client=SimpleNamespace(responses=responses),
+        structured_response_observer=observed.append,
+    )
+
+    assert provider.generate_build(BuildRequest("Reach it", None, None, ())) == response
+
+    assert len(observed) == 2
+    assert observed[0].name == "builder_manifest"
+    assert observed[0].schema == MANIFEST_SCHEMA
+    assert observed[0].output == manifest
+    assert observed[1].name == "generated_build_response"
+    assert observed[1].schema == build_response_schema(manifest)
+    assert observed[1].output == response
+
+
+def test_builder_observes_a_failed_physical_structured_call() -> None:
+    observed: list[Any] = []
+    provider = OpenAIProvider(
+        client=SimpleNamespace(responses=FailingResponses()),
+        structured_response_observer=observed.append,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated provider failure"):
+        provider.generate_build(BuildRequest("Reach it", None, None, ()))
+
+    assert len(observed) == 1
+    assert observed[0].name == "builder_manifest"
+    assert observed[0].schema == MANIFEST_SCHEMA
+    assert observed[0].output is None
+    assert observed[0].error == "simulated provider failure"
 
 
 def test_every_supported_fixture_satisfies_its_generated_strict_schema() -> None:
