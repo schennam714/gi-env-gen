@@ -35,12 +35,14 @@ authoritative wording used by validation and any later repair.
 
 Map rows are rectangular ASCII; # is wall and . is floor. Every other source token
 occurs once. Entity symbol is one printable character and solid is boolean. Additional
-builder-chosen properties may be boolean, number, string, or null. Global values and
-failures remain empty in the currently supported vocabulary.
+builder-chosen properties may be boolean, number, string, or null. Global values
+remain empty in the currently supported vocabulary.
 
 The conditions are at, adjacent, can_move, property_equals, and recursive all, any,
-and not composition. The effects are move, set_position, set_property, emit, and
-repeat. set_position sets coordinates, copies another entity's position, or uses null
+and not composition. The effects are move, move_toward, set_position, set_property,
+emit, and repeat. move_toward takes one traversable shortest-path step toward its
+target, uses UP, RIGHT, DOWN, LEFT tie breaking, and is a no-op when no path exists.
+set_position sets coordinates, copies another entity's position, or uses null
 to remove an entity from rendering while preserving its properties. repeat rechecks
 its condition after each complete child-effect pass, cannot nest, and shares the
 100-effect turn limit with direct and automatic effects. References beginning with $
@@ -49,6 +51,8 @@ resolve a matching action parameter. Directions are UP, RIGHT, DOWN, or LEFT.
 Automatic rules run once in declared order after every well-formed action attempt,
 and effects run sequentially. Possession, access, pushing, triggering, and repeated
 movement must be composed from generic operations; none is a runtime mechanic.
+Failures are exact generated predicates checked after automatic rules and before
+objectives; failure wins if final success is also true in that turn.
 
 Objectives are ordered and no objective may be true initially. Supply a proposed
 solution that deterministically reaches success. If the request cannot be represented

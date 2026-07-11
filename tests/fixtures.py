@@ -206,6 +206,62 @@ def push_trigger_build_response() -> dict[str, Any]:
     }
 
 
+def pursuit_build_response() -> dict[str, Any]:
+    """A provider-fake autonomous composition, not a pursuit mechanic template."""
+    return {
+        "status": "generated",
+        "interpretation": [
+            "The explorer must reach the beacon while an autonomous entity moves toward it.",
+            "Sharing a position with the autonomous entity ends the run.",
+        ],
+        "environment": {
+            "actor": "explorer",
+            "map": ["#######", "#A...E#", "#.###.#", "#T....#", "#######"],
+            "legend": {
+                "A": {"id": "explorer", "properties": {"symbol": "@", "solid": True}},
+                "T": {"id": "pursuer", "properties": {"symbol": "T", "solid": False}},
+                "E": {"id": "beacon", "properties": {"symbol": "X", "solid": False}},
+            },
+            "values": {},
+            "actions": [
+                {
+                    "name": "ADVANCE",
+                    "parameters": {"heading": "direction"},
+                    "allowed_when": [{"operation": "can_move", "entity": "explorer", "direction": "$heading"}],
+                    "effects": [{"operation": "move", "entity": "explorer", "direction": "$heading"}],
+                }
+            ],
+            "after_action": [
+                {
+                    "id": "close_distance",
+                    "when": [],
+                    "effects": [{"operation": "move_toward", "entity": "pursuer", "target": "explorer"}],
+                }
+            ],
+            "objectives": [
+                {
+                    "id": "reach_beacon",
+                    "description": "Reach the beacon.",
+                    "satisfied_when": {"operation": "at", "first": "explorer", "second": "beacon"},
+                }
+            ],
+            "failures": [
+                {
+                    "id": "caught",
+                    "description": "The autonomous entity reached the explorer.",
+                    "when": {"operation": "at", "first": "pursuer", "second": "explorer"},
+                }
+            ],
+        },
+        "solution": [
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+        ],
+    }
+
+
 def possession_prerequisite_build_response() -> dict[str, Any]:
     """A provider-fake generic possession composition, not a mechanic template."""
     return {

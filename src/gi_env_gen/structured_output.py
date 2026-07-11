@@ -8,7 +8,9 @@ SCALAR_SCHEMA: JsonObject = {"type": ["boolean", "number", "string", "null"]}
 CONDITION_OPERATIONS = frozenset(
     {"all", "any", "not", "at", "adjacent", "can_move", "property_equals"}
 )
-NON_REPEAT_EFFECT_OPERATIONS = frozenset({"move", "set_position", "set_property", "emit"})
+NON_REPEAT_EFFECT_OPERATIONS = frozenset(
+    {"move", "move_toward", "set_position", "set_property", "emit"}
+)
 EFFECT_OPERATIONS = NON_REPEAT_EFFECT_OPERATIONS | {"repeat"}
 
 
@@ -314,8 +316,13 @@ def _environment_schema(
             },
             "failures": {
                 "type": "array",
-                "maxItems": 0,
-                "items": _strict_object_schema({}),
+                "items": _strict_object_schema(
+                    {
+                        "id": {"type": "string", "minLength": 1},
+                        "description": {"type": "string", "minLength": 1},
+                        "when": {"$ref": "#/$defs/condition"},
+                    }
+                ),
             },
         }
     )
@@ -445,6 +452,13 @@ def _non_repeat_effect_schema() -> JsonObject:
                     "operation": _string_const("move"),
                     "entity": entity_ref,
                     "direction": direction_ref,
+                }
+            ),
+            _strict_object_schema(
+                {
+                    "operation": _string_const("move_toward"),
+                    "entity": entity_ref,
+                    "target": entity_ref,
                 }
             ),
             _strict_object_schema(

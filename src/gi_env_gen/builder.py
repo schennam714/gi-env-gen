@@ -145,6 +145,14 @@ def _validate_response(
         return GenerationFailed("validation_rejected", (diagnostic,), ())
     frozen = freeze_environment(environment)
     initial = start(frozen)
+    for index, failure in enumerate(environment["failures"]):
+        if _condition(environment, initial.state, failure["when"], {}):
+            return _failure(
+                "initial_state",
+                "FAILURE_SATISFIED_AT_RESET",
+                f"environment.failures[{index}]",
+                "Every failure must be false at reset.",
+            )
     for index, objective in enumerate(environment["objectives"]):
         if _condition(environment, initial.state, objective["satisfied_when"], {}):
             return _failure(
@@ -176,6 +184,13 @@ def _validate_response(
             )
         replay.append(transition)
         state = transition.state
+        if state.status == "failure":
+            return _failure(
+                "solution_replay",
+                "GENERATED_FAILURE",
+                f"solution[{index}]",
+                f"Proposed solution triggered failure {state.failure_id!r}.",
+            )
     if state.status != "success":
         return _failure(
             "solution_replay",
@@ -228,8 +243,8 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         entity_properties[declaration["id"]] = set(props)
     if len(ids) != len(set(ids)) or program["actor"] not in ids:
         return Diagnostic("references", "INVALID_ACTOR_OR_ENTITY_IDS", "environment.actor", "Actor must name a unique entity.")
-    if program["values"] != {} or program["failures"] != []:
-        return Diagnostic("shape", "OUTSIDE_CURRENT_VOCABULARY", "environment", "This slice requires empty values and failures.")
+    if program["values"] != {}:
+        return Diagnostic("shape", "OUTSIDE_CURRENT_VOCABULARY", "environment.values", "This slice requires empty values.")
     if not isinstance(program["actions"], list) or not program["actions"]:
         return Diagnostic("shape", "INVALID_ACTIONS", "environment.actions", "At least one action is required.")
     action_names: set[str] = set()
@@ -285,6 +300,23 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
             return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Objective IDs must be unique and descriptions textual.")
         objective_ids.add(objective["id"])
         error = _validate_condition(objective["satisfied_when"], ids, entity_properties, {}, path + ".satisfied_when")
+        if error:
+            return error
+    if not isinstance(program["failures"], list):
+        return Diagnostic("shape", "INVALID_FAILURES", "environment.failures", "Failures must be an array.")
+    failure_ids: set[str] = set()
+    for index, failure in enumerate(program["failures"]):
+        path = f"environment.failures[{index}]"
+        if (
+            not isinstance(failure, dict)
+            or set(failure) != {"id", "description", "when"}
+            or not isinstance(failure["id"], str)
+            or not isinstance(failure["description"], str)
+            or failure["id"] in failure_ids
+        ):
+            return Diagnostic("shape", "INVALID_FAILURE", path, "Failure IDs must be unique and descriptions textual.")
+        failure_ids.add(failure["id"])
+        error = _validate_condition(failure["when"], ids, entity_properties, {}, path + ".when")
         if error:
             return error
     return None
@@ -413,6 +445,13 @@ def _validate_effect(
         if set(effect) != {"operation", "entity", "direction"}:
             return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid move effect shape.")
         return _validate_entity_and_direction(effect, ids, parameters, path)
+    if operation == "move_toward":
+        if set(effect) != {"operation", "entity", "target"}:
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid move_toward effect shape.")
+        for key in ("entity", "target"):
+            if not _entity_reference(effect[key], ids, parameters):
+                return Diagnostic("references", "UNKNOWN_ENTITY", path + "." + key, "Unknown entity reference.")
+        return None
     if operation == "set_position":
         if set(effect) != {"operation", "entity", "destination"}:
             return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid set_position effect shape.")

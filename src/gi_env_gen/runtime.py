@@ -14,7 +14,7 @@ DIRECTIONS = {
 
 
 RuntimeStatus: TypeAlias = Literal["running", "success", "failure"]
-TransitionOutcome: TypeAlias = Literal["started", "applied", "inapplicable", "success"]
+TransitionOutcome: TypeAlias = Literal["started", "applied", "inapplicable", "success", "failure"]
 
 
 class EnvironmentProgramError(ValueError):
@@ -52,6 +52,8 @@ class Transition:
     applicable: bool | None
     outcome: TransitionOutcome
     effect_states: tuple[RuntimeState, ...] = ()
+    direct_effect_states: tuple[RuntimeState, ...] = ()
+    automatic_effect_states: tuple[RuntimeState, ...] = ()
 
 
 @dataclass
@@ -116,6 +118,7 @@ def step(
                 arguments,
                 execution,
             )
+    direct_effect_count = len(execution.states)
     for rule in program["after_action"]:
         provisional = _state_after_effects(state, positions, properties, current_events, episode_events)
         if all(_condition(program, provisional, condition, {}) for condition in rule["when"]):
@@ -144,22 +147,46 @@ def step(
         failure_id=None,
     )
     _validate_runtime_state(program, next_state)
-    completed = list(next_state.completed_objectives)
-    for objective in program["objectives"][len(completed) :]:
-        if not _condition(program, next_state, objective["satisfied_when"], {}):
-            break
-        completed.append(objective["id"])
-    status = "success" if len(completed) == len(program["objectives"]) else "running"
-    next_state = RuntimeState(
-        **{**next_state.__dict__, "completed_objectives": tuple(completed), "status": status}
+    failure_id = next(
+        (
+            failure["id"]
+            for failure in program["failures"]
+            if _condition(program, next_state, failure["when"], {})
+        ),
+        None,
     )
-    outcome: TransitionOutcome = "success" if status == "success" else ("applied" if applicable else "inapplicable")
+    completed = list(next_state.completed_objectives)
+    if failure_id is None:
+        for objective in program["objectives"][len(completed) :]:
+            if not _condition(program, next_state, objective["satisfied_when"], {}):
+                break
+            completed.append(objective["id"])
+    status: RuntimeStatus = (
+        "failure"
+        if failure_id is not None
+        else "success"
+        if len(completed) == len(program["objectives"])
+        else "running"
+    )
+    next_state = RuntimeState(
+        **{
+            **next_state.__dict__,
+            "completed_objectives": tuple(completed),
+            "status": status,
+            "failure_id": failure_id,
+        }
+    )
+    outcome: TransitionOutcome = (
+        status if status in {"success", "failure"} else ("applied" if applicable else "inapplicable")
+    )
     return Transition(
         next_state,
         _observation(program, next_state, outcome),
         applicable,
         outcome,
         tuple(execution.states),
+        tuple(execution.states[:direct_effect_count]),
+        tuple(execution.states[direct_effect_count:]),
     )
 
 
@@ -287,6 +314,14 @@ def _effect(
         positions[entity] = (x + dx, y + dy)
         _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
         return
+    if operation == "move_toward":
+        entity = _resolve(effect["entity"], arguments)
+        target = _resolve(effect["target"], arguments)
+        next_position = _shortest_path_step(program, positions, properties, entity, target)
+        if next_position is not None:
+            positions[entity] = next_position
+        _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
+        return
     if operation == "set_position":
         entity = _resolve(effect["entity"], arguments)
         destination = effect["destination"]
@@ -406,6 +441,44 @@ def _can_move(
     )
 
 
+def _shortest_path_step(
+    program: JsonObject,
+    positions: Mapping[str, tuple[int, int] | None],
+    properties: Mapping[str, Mapping[str, Any]],
+    entity: str,
+    target: str,
+) -> tuple[int, int] | None:
+    start_position = positions[entity]
+    target_position = positions[target]
+    if start_position is None or target_position is None or start_position == target_position:
+        return None
+    width, height = len(program["map"][0]), len(program["map"])
+    blocked = {
+        position
+        for other, position in positions.items()
+        if other != entity
+        and other != target
+        and position is not None
+        and properties[other]["solid"] is True
+    }
+    queue: list[tuple[tuple[int, int], tuple[int, int] | None]] = [(start_position, None)]
+    visited = {start_position}
+    for position, first_step in queue:
+        for dx, dy in DIRECTIONS.values():
+            candidate = (position[0] + dx, position[1] + dy)
+            if candidate in visited or candidate in blocked:
+                continue
+            x, y = candidate
+            if not (0 <= x < width and 0 <= y < height) or program["map"][y][x] == "#":
+                continue
+            candidate_first = candidate if first_step is None else first_step
+            if candidate == target_position:
+                return candidate_first
+            visited.add(candidate)
+            queue.append((candidate, candidate_first))
+    return None
+
+
 def _observation(
     program: JsonObject,
     state: RuntimeState,
@@ -444,7 +517,10 @@ def _observation(
             }
             for index, objective in enumerate(program["objectives"])
         ],
-        "failures": [],
+        "failures": [
+            {"id": failure["id"], "description": failure["description"]}
+            for failure in program["failures"]
+        ],
         "previous_outcome": previous_outcome,
         "step": state.step,
     }
