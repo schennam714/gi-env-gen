@@ -72,6 +72,17 @@ def test_move_toward_uses_fixed_tie_breaking_and_no_path_is_a_no_op() -> None:
     )
     assert blocked.state.positions["pursuer"] == blocked_initial.positions["pursuer"]
 
+    solid_target_program = deepcopy(program)
+    solid_target_program["legend"]["T"]["properties"]["solid"] = True
+    solid_target_environment = freeze_environment(solid_target_program)
+    solid_target_initial = start(solid_target_environment).state
+    solid_target = step(
+        solid_target_environment,
+        solid_target_initial,
+        {"action": "ADVANCE", "arguments": {"heading": "LEFT"}},
+    )
+    assert solid_target.state.positions["pursuer"] == solid_target_initial.positions["pursuer"]
+
 
 def test_failure_wins_over_objective_completion_in_the_same_turn() -> None:
     response = pursuit_build_response()

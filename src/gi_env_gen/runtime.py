@@ -457,9 +457,9 @@ def _shortest_path_step(
         position
         for other, position in positions.items()
         if other != entity
-        and other != target
         and position is not None
         and properties[other]["solid"] is True
+        and (other != target or properties[entity]["solid"] is True)
     }
     queue: list[tuple[tuple[int, int], tuple[int, int] | None]] = [(start_position, None)]
     visited = {start_position}
