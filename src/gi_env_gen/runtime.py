@@ -22,13 +22,20 @@ class EnvironmentProgramError(ValueError):
 
 
 @dataclass(frozen=True)
+class EventRecord:
+    event: str
+    target: str | None
+    step: int
+
+
+@dataclass(frozen=True)
 class RuntimeState:
     positions: Mapping[str, tuple[int, int] | None]
     properties: Mapping[str, Mapping[str, Any]]
     values: Mapping[str, Any]
     completed_objectives: tuple[str, ...]
-    current_step_events: tuple[object, ...]
-    episode_events: tuple[object, ...]
+    current_step_events: tuple[EventRecord, ...]
+    episode_events: tuple[EventRecord, ...]
     step: int
     status: RuntimeStatus
     failure_id: str | None
@@ -80,20 +87,29 @@ def step(
         _condition(program, state, condition, arguments) for condition in action["allowed_when"]
     )
     positions = dict(state.positions)
+    properties = {key: dict(value) for key, value in state.properties.items()}
+    current_events: list[EventRecord] = []
+    episode_events = list(state.episode_events)
     if applicable:
         for effect in action["effects"]:
-            _effect(program, state, positions, effect, arguments)
+            _effect(program, positions, properties, current_events, episode_events, state.step + 1, effect, arguments)
+    for rule in program["after_action"]:
+        provisional = _state_after_effects(state, positions, properties, current_events, episode_events)
+        if all(_condition(program, provisional, condition, {}) for condition in rule["when"]):
+            for effect in rule["effects"]:
+                _effect(program, positions, properties, current_events, episode_events, state.step + 1, effect, {})
     next_state = RuntimeState(
-        positions=positions,
-        properties={key: dict(value) for key, value in state.properties.items()},
+        positions=dict(positions),
+        properties={key: dict(value) for key, value in properties.items()},
         values=dict(state.values),
         completed_objectives=state.completed_objectives,
-        current_step_events=(),
-        episode_events=state.episode_events,
+        current_step_events=tuple(current_events),
+        episode_events=tuple(episode_events),
         step=state.step + 1,
         status="running",
         failure_id=None,
     )
+    _validate_runtime_state(next_state)
     completed = list(next_state.completed_objectives)
     for objective in program["objectives"][len(completed) :]:
         if not _condition(program, next_state, objective["satisfied_when"], {}):
@@ -121,7 +137,9 @@ def _matching_action(program: JsonObject, invocation: Mapping[str, Any]) -> Json
         value = arguments[name]
         if kind == "direction" and value not in DIRECTIONS:
             raise EnvironmentProgramError(f"argument {name!r} must be a direction")
-        if kind != "direction":
+        if kind == "entity" and (not isinstance(value, str) or value not in _entity_ids(program)):
+            raise EnvironmentProgramError(f"argument {name!r} must name a declared entity")
+        if kind not in {"direction", "entity"}:
             raise EnvironmentProgramError(f"unsupported parameter type in minimal runtime: {kind!r}")
     return cast(JsonObject, action)
 
@@ -145,25 +163,102 @@ def _condition(
         entity = _resolve(condition["entity"], arguments)
         direction = _resolve(condition["direction"], arguments)
         return _can_move(program, state.positions, state.properties, entity, direction)
+    if operation == "adjacent":
+        first = _resolve(condition["first"], arguments)
+        second = _resolve(condition["second"], arguments)
+        first_position = state.positions[first]
+        second_position = state.positions[second]
+        if first_position is None or second_position is None:
+            return False
+        dx = second_position[0] - first_position[0]
+        dy = second_position[1] - first_position[1]
+        if abs(dx) + abs(dy) != 1:
+            return False
+        if "direction" not in condition:
+            return True
+        direction = _resolve(condition["direction"], arguments)
+        return DIRECTIONS.get(direction) == (dx, dy)
+    if operation == "property_equals":
+        entity = _resolve(condition["entity"], arguments)
+        value = _resolve(condition["value"], arguments) if isinstance(condition["value"], str) else condition["value"]
+        return condition["property"] in state.properties[entity] and state.properties[entity][condition["property"]] == value
     raise EnvironmentProgramError(f"unsupported condition operation: {operation!r}")
 
 
 def _effect(
     program: JsonObject,
-    state: RuntimeState,
     positions: dict[str, tuple[int, int] | None],
+    properties: dict[str, dict[str, Any]],
+    current_events: list[EventRecord],
+    episode_events: list[EventRecord],
+    step_number: int,
     effect: Mapping[str, Any],
     arguments: Mapping[str, Any],
 ) -> None:
-    if effect["operation"] != "move":
-        raise EnvironmentProgramError(f"unsupported effect operation: {effect['operation']!r}")
-    entity = _resolve(effect["entity"], arguments)
-    direction = _resolve(effect["direction"], arguments)
-    if not _can_move(program, positions, state.properties, entity, direction):
-        raise EnvironmentProgramError("move effect would create invalid state")
-    x, y = positions[entity] or (0, 0)
-    dx, dy = DIRECTIONS[direction]
-    positions[entity] = (x + dx, y + dy)
+    operation = effect["operation"]
+    if operation == "move":
+        entity = _resolve(effect["entity"], arguments)
+        direction = _resolve(effect["direction"], arguments)
+        if not _can_move(program, positions, properties, entity, direction):
+            raise EnvironmentProgramError("move effect would create invalid state")
+        x, y = positions[entity] or (0, 0)
+        dx, dy = DIRECTIONS[direction]
+        positions[entity] = (x + dx, y + dy)
+        return
+    if operation == "set_property":
+        entity = _resolve(effect["entity"], arguments)
+        property_name = effect["property"]
+        if property_name not in properties[entity]:
+            raise EnvironmentProgramError(f"unknown property {property_name!r} on entity {entity!r}")
+        value = _resolve(effect["value"], arguments) if isinstance(effect["value"], str) else effect["value"]
+        properties[entity][property_name] = value
+        return
+    if operation == "emit":
+        target = _resolve(effect["target"], arguments) if "target" in effect else None
+        event = EventRecord(effect["event"], target, step_number)
+        current_events.append(event)
+        episode_events.append(event)
+        return
+    raise EnvironmentProgramError(f"unsupported effect operation: {operation!r}")
+
+
+def _state_after_effects(
+    previous: RuntimeState,
+    positions: Mapping[str, tuple[int, int] | None],
+    properties: Mapping[str, Mapping[str, Any]],
+    current_events: list[EventRecord],
+    episode_events: list[EventRecord],
+) -> RuntimeState:
+    return RuntimeState(
+        positions=positions,
+        properties=properties,
+        values=previous.values,
+        completed_objectives=previous.completed_objectives,
+        current_step_events=tuple(current_events),
+        episode_events=tuple(episode_events),
+        step=previous.step + 1,
+        status="running",
+        failure_id=None,
+    )
+
+
+def _entity_ids(program: JsonObject) -> set[str]:
+    return {declaration["id"] for declaration in program["legend"].values()}
+
+
+def _validate_runtime_state(state: RuntimeState) -> None:
+    solid_positions: set[tuple[int, int]] = set()
+    for entity, properties in state.properties.items():
+        symbol = properties.get("symbol")
+        if not isinstance(symbol, str) or len(symbol) != 1 or not 0x20 <= ord(symbol) <= 0x7E:
+            raise EnvironmentProgramError(f"entity {entity!r} has an invalid symbol")
+        if type(properties.get("solid")) is not bool:
+            raise EnvironmentProgramError(f"entity {entity!r} has an invalid solid property")
+        position = state.positions[entity]
+        if properties["solid"] is True and position is not None:
+            if position in solid_positions:
+                raise EnvironmentProgramError("two solid entities cannot share a position")
+            solid_positions.add(position)
 
 
 def _can_move(

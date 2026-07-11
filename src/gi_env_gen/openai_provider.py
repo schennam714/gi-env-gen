@@ -18,22 +18,31 @@ For this minimal slice, environment must contain actor, map, legend, values, act
 after_action, objectives, and failures. Map rows are rectangular ASCII; # is wall and .
 is floor. Every other one-character token occurs once and maps through legend to an
 entity with id and properties containing one-character symbol and boolean solid.
-values, after_action, and failures must be empty.
+Additional builder-chosen properties may be boolean, number, string, or null. values
+and failures must be empty in this slice.
 
 You author action names. Every action has exactly this shape:
-{"name":<string>, "parameters":{<parameter name>:"direction"},
+{"name":<string>, "parameters":{<parameter name>:"direction" or "entity"},
 "allowed_when":[<condition>, ...], "effects":[<effect>, ...]}.
 parameters is a JSON object, never an array. The only generic conditions are:
 - {operation:'at', first:<entity id>, second:<entity id>}
+- {operation:'adjacent', first:<entity ref>, second:<entity ref>, optional direction:<direction ref>}
 - {operation:'can_move', entity:<entity id>, direction:<literal or $parameter>}
-The only effect is {operation:'move', entity:<entity id>, direction:<literal or
-$parameter>}. Directions are exactly "UP", "RIGHT", "DOWN", or "LEFT". The runtime
-has no fixed MOVE action or reach mechanic.
+- {operation:'property_equals', entity:<entity ref>, property:<declared property>, value:<scalar>}
+The generic effects are move, set_property on an existing property, and emit with an
+event string and optional entity target. Entity and direction references may use a
+matching $parameter inside their declaring action. Directions are exactly "UP",
+"RIGHT", "DOWN", or "LEFT".
+
+after_action contains rules shaped {"id":<string>, "when":[<condition>, ...],
+"effects":[<effect>, ...]}. They run once in declared order after every well-formed
+action attempt. Effects run sequentially. The runtime has no fixed MOVE, PUSH,
+crate, plate, or gate mechanic.
 
 Objectives are ordered objects shaped exactly {"id":<string>, "description":<string>,
 "satisfied_when":<one condition object>}; satisfied_when is never an array. Every
-solution item is exactly {"action":<generated action name>, "arguments":{<parameter
-name>:<uppercase direction>}}. Supply a solution that deterministically reaches
+solution item is exactly {"action":<generated action name>, "arguments":{<declared
+parameter name>:<typed value>}}. Supply a solution that deterministically reaches
 success. No objective may be true initially. If the request cannot be represented
 exactly, return unsupported; do not approximate. Interpretation is visible, fallible
 model judgment.
@@ -48,7 +57,8 @@ ACTOR_INSTRUCTIONS = """You are the acting policy in a frozen deterministic 2D w
 The JSON observation is complete. Choose exactly one available generated action and
 return JSON shaped {"action": <name>, "arguments": {...}}. Copy the action name and
 parameter names exactly. A direction argument must be exactly one of "UP", "RIGHT",
-"DOWN", or "LEFT" in uppercase. Never claim or alter state.
+"DOWN", or "LEFT" in uppercase. An entity argument must copy a current declared entity
+ID exactly. Never claim or alter state.
 """
 
 

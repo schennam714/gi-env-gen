@@ -1,10 +1,10 @@
 # GI environment generator
 
-This first tracer bullet asks an OpenAI builder model to author a tiny ASCII reach
-world, validates its proposed solution with deterministic code, freezes the accepted
-program, then gives a separate acting role only the current observation. Action names,
-movement rules, the map, and the objective come from the builder; the runtime only
-implements the generic `at`, `can_move`, and `move` operations.
+The harness asks an OpenAI builder model to author an ASCII environment, validates its
+proposed solution with deterministic code, freezes the accepted program, then gives a
+separate acting role only the current observation. Action names, rules, the map, and
+objectives come from the builder; the runtime implements only the documented generic
+condition and effect operations.
 
 ## Offline tests
 
@@ -25,6 +25,12 @@ structurally valid interpretation is frozen, and generation stops after three re
 candidates. A valid `unsupported` response stops immediately and is shown with the
 builder's interpretation and reason; the harness does not approximate the request or
 repair generated geometry and rules itself.
+
+The current rule language also supports builder-chosen scalar entity properties,
+entity and direction action parameters, `adjacent` and `property_equals` conditions,
+sequential `move`, `set_property`, and `emit` effects, and ordered after-action rules.
+These are generic operations: generated actions and automatic rules compose them into
+environment-specific behavior without runtime branches for complete mechanics.
 
 ## Credentialed smoke path
 

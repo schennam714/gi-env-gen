@@ -46,15 +46,15 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets that 
 
 **Blocked by:** Repair rejected programs and stop unsupported requests.
 
-- [ ] Support arbitrary declared entity properties with required symbol and solid properties.
-- [ ] Resolve entity and direction action parameters referenced from conditions and effects.
-- [ ] Interpret adjacent and property_equals conditions.
-- [ ] Apply effects sequentially so a generated rule can move one entity before moving another into its previous position.
-- [ ] Interpret set_property and emit effects without adding push, crate, plate, or gate branches to the runtime.
-- [ ] Run generated after-action rules once in declared order.
-- [ ] Complete multiple consecutive objectives from one resulting state and keep completed objectives complete.
-- [ ] Render state-driven symbol and solidity changes from current entity properties.
-- [ ] Replay and independently act through a generated push/trigger program using the same runtime interface.
+- [x] Require every generated entity to declare symbol as a string and solid as a boolean. Preserve any additional builder-chosen boolean, number, string, or null properties so generated rules can read and change them; do not predefine names such as movable or open.
+- [x] For a generated action invocation, type-check its declared entity and direction arguments and replace matching $parameter references inside that action's conditions and effects.
+- [x] Implement adjacent as orthogonal adjacency, optionally constrained by direction, and property_equals as equality against an entity's current declared property.
+- [x] Apply generated effects in array order, so one effect may move a target away before the next effect moves another entity into the vacated cell.
+- [x] Implement set_property by changing one current entity property and emit by recording an exact event. Do not add runtime functions or branches named for pushing, crates, plates, or gates.
+- [x] After each well-formed action attempt, evaluate every generated after_action rule once in array order. Later rules see earlier changes, and the rule list does not restart.
+- [x] After automatic rules finish, permanently complete the next ordered objective when its condition is true, then continue through any immediately true consecutive objectives.
+- [x] Render each positioned entity using its current symbol property and make can_move use its current solid property, so generated property changes affect both display and collision.
+- [x] Validate the builder's generated push/trigger solution and run the same frozen environment with the separate acting LLM through the existing runtime start and step interfaces.
 
 
 
