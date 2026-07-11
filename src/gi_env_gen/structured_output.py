@@ -6,10 +6,10 @@ from .model import JsonObject
 
 SCALAR_SCHEMA: JsonObject = {"type": ["boolean", "number", "string", "null"]}
 CONDITION_OPERATIONS = frozenset(
-    {"all", "any", "not", "at", "adjacent", "can_move", "property_equals"}
+    {"all", "any", "not", "at", "adjacent", "can_move", "property_equals", "value_compare"}
 )
 NON_REPEAT_EFFECT_OPERATIONS = frozenset(
-    {"move", "move_toward", "set_position", "set_property", "emit"}
+    {"move", "move_toward", "set_position", "set_property", "set_value", "change_value", "emit"}
 )
 EFFECT_OPERATIONS = NON_REPEAT_EFFECT_OPERATIONS | {"repeat"}
 
@@ -38,7 +38,7 @@ def _interpretation_schema() -> JsonObject:
 _PARAMETER_MANIFEST_SCHEMA = _strict_object_schema(
     {
         "name": {"type": "string", "minLength": 1},
-        "type": {"type": "string", "enum": ["direction", "entity"]},
+        "type": {"type": "string", "enum": ["direction", "entity", "number", "string"]},
     }
 )
 _ENTITY_MANIFEST_SCHEMA = _strict_object_schema(
@@ -85,6 +85,7 @@ MANIFEST_SCHEMA: JsonObject = _strict_object_schema(
                             "minItems": 1,
                             "items": _ACTION_MANIFEST_SCHEMA,
                         },
+                        "values": {"type": "array", "items": {"type": "string", "minLength": 1}},
                     }
                 ),
             ]
@@ -121,6 +122,7 @@ def manifest_from_generated(response: Mapping[str, Any]) -> JsonObject:
                 }
                 for action in actions
             ],
+            "values": list(cast(Mapping[str, Any], environment["values"])),
         },
     }
 
@@ -142,8 +144,11 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise ValueError("builder manifest status must be generated or unsupported")
     entities = plan.get("entities")
     actions = plan.get("actions")
-    if not isinstance(entities, list) or not entities or not isinstance(actions, list) or not actions:
+    values = plan.get("values")
+    if not isinstance(entities, list) or not entities or not isinstance(actions, list) or not actions or not isinstance(values, list):
         raise ValueError("generated builder manifest requires entities and actions")
+    if not all(isinstance(value, str) and value for value in values) or len(values) != len(set(values)):
+        raise ValueError("generated builder manifest value names must be unique strings")
 
 
 def build_response_schema(manifest: Mapping[str, Any]) -> JsonObject:
@@ -159,6 +164,7 @@ def build_response_schema(manifest: Mapping[str, Any]) -> JsonObject:
         )
     entities = cast(list[Mapping[str, Any]], plan["entities"])
     actions = cast(list[Mapping[str, Any]], plan["actions"])
+    values = cast(list[str], plan["values"])
     condition = _condition_schema()
     non_repeat = _non_repeat_effect_schema()
     effect = {
@@ -180,7 +186,7 @@ def build_response_schema(manifest: Mapping[str, Any]) -> JsonObject:
         {
             "status": _string_const("generated"),
             "interpretation": _interpretation_schema(),
-            "environment": _environment_schema(entities, actions),
+            "environment": _environment_schema(entities, actions, values),
             "solution": {
                 "type": "array",
                 "items": {"anyOf": [_invocation_schema(action) for action in actions]},
@@ -203,6 +209,9 @@ def manifest_mismatch(response: Mapping[str, Any], manifest: Mapping[str, Any]) 
         return None
     expected_entities = cast(list[Mapping[str, Any]], plan["entities"])
     expected_actions = cast(list[Mapping[str, Any]], plan["actions"])
+    expected_values = cast(list[str], plan["values"])
+    if len(expected_values) != len(set(expected_values)):
+        return "Manifest value names must be unique."
     if not _manifest_names_are_unique(expected_entities, expected_actions):
         return "Manifest tokens, IDs, properties, actions, and parameters must be unique."
     actual = manifest_from_generated(response)
@@ -213,6 +222,8 @@ def manifest_mismatch(response: Mapping[str, Any], manifest: Mapping[str, Any]) 
         return "Complete response entities and properties differ from its manifest."
     if _action_signature(actual_actions) != _action_signature(expected_actions):
         return "Complete response actions and parameters differ from its manifest."
+    if set(cast(list[str], actual_plan["values"])) != set(expected_values):
+        return "Complete response values differ from its manifest."
     return None
 
 
@@ -255,7 +266,7 @@ def _action_signature(actions: Sequence[Mapping[str, Any]]) -> dict[str, frozens
 
 
 def _environment_schema(
-    entities: Sequence[Mapping[str, Any]], actions: Sequence[Mapping[str, Any]]
+    entities: Sequence[Mapping[str, Any]], actions: Sequence[Mapping[str, Any]], values: Sequence[str]
 ) -> JsonObject:
     legend: dict[str, JsonObject] = {}
     for entity in entities:
@@ -281,7 +292,7 @@ def _environment_schema(
                 "items": {"type": "string", "minLength": 1},
             },
             "legend": _strict_object_schema(legend),
-            "values": _strict_object_schema({}),
+            "values": _strict_object_schema({name: dict(SCALAR_SCHEMA) for name in values}),
             "actions": {
                 "type": "array",
                 "minItems": 1,
@@ -354,6 +365,8 @@ def _invocation_schema(action: Mapping[str, Any]) -> JsonObject:
         parameter["name"]: (
             {"type": "string", "enum": ["UP", "RIGHT", "DOWN", "LEFT"]}
             if parameter["type"] == "direction"
+            else {"type": "number"}
+            if parameter["type"] == "number"
             else {"type": "string", "minLength": 1}
         )
         for parameter in parameters
@@ -432,6 +445,14 @@ def _condition_schema() -> JsonObject:
                     "value": dict(SCALAR_SCHEMA),
                 }
             ),
+            _strict_object_schema(
+                {
+                    "operation": _string_const("value_compare"),
+                    "value": {"type": "string", "minLength": 1},
+                    "comparator": {"type": "string", "enum": ["eq", "ne", "lt", "lte", "gt", "gte"]},
+                    "expected": {"anyOf": [{"type": "number"}, {"type": "string", "pattern": r"^\$.+"}]},
+                }
+            ),
         ]
     }
 
@@ -476,6 +497,20 @@ def _non_repeat_effect_schema() -> JsonObject:
                     "entity": entity_ref,
                     "property": {"type": "string", "minLength": 1},
                     "value": dict(SCALAR_SCHEMA),
+                }
+            ),
+            _strict_object_schema(
+                {
+                    "operation": _string_const("set_value"),
+                    "value": {"type": "string", "minLength": 1},
+                    "new_value": dict(SCALAR_SCHEMA),
+                }
+            ),
+            _strict_object_schema(
+                {
+                    "operation": _string_const("change_value"),
+                    "value": {"type": "string", "minLength": 1},
+                    "amount": {"anyOf": [{"type": "number"}, {"type": "string", "pattern": r"^\$.+"}]},
                 }
             ),
             _strict_object_schema(

@@ -53,6 +53,70 @@ def reach_build_response() -> dict[str, Any]:
     }
 
 
+def timed_build_response() -> dict[str, Any]:
+    """A provider-fake numeric-state composition, not a resource mechanic template."""
+    return {
+        "status": "generated",
+        "interpretation": ["Reach the beacon before the remaining turns reach zero."],
+        "environment": {
+            "actor": "explorer",
+            "map": ["######", "#A..B#", "######"],
+            "legend": {
+                "A": {"id": "explorer", "properties": {"symbol": "@", "solid": True}},
+                "B": {"id": "beacon", "properties": {"symbol": "X", "solid": False}},
+            },
+            "values": {"remaining": 4, "moves": 0, "marker": 0},
+            "actions": [
+                {
+                    "name": "ADVANCE",
+                    "parameters": {"heading": "direction"},
+                    "allowed_when": [
+                        {"operation": "can_move", "entity": "explorer", "direction": "$heading"}
+                    ],
+                    "effects": [
+                        {"operation": "move", "entity": "explorer", "direction": "$heading"}
+                    ],
+                }
+            ],
+            "after_action": [
+                {
+                    "id": "advance_values",
+                    "when": [],
+                    "effects": [
+                        {"operation": "change_value", "value": "remaining", "amount": -1},
+                        {"operation": "change_value", "value": "moves", "amount": 1},
+                        {"operation": "set_value", "value": "marker", "new_value": 1},
+                    ],
+                }
+            ],
+            "objectives": [
+                {
+                    "id": "reach_beacon",
+                    "description": "Reach the beacon while time remains.",
+                    "satisfied_when": {"operation": "at", "first": "explorer", "second": "beacon"},
+                }
+            ],
+            "failures": [
+                {
+                    "id": "out_of_turns",
+                    "description": "The remaining turns reached zero.",
+                    "when": {
+                        "operation": "value_compare",
+                        "value": "remaining",
+                        "comparator": "lte",
+                        "expected": 0,
+                    },
+                }
+            ],
+        },
+        "solution": [
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+        ],
+    }
+
+
 def push_trigger_build_response() -> dict[str, Any]:
     """A provider-fake composition of generic operations, not a mechanic template."""
     return {

@@ -101,6 +101,7 @@ def step(
     )
     positions = dict(state.positions)
     properties = {key: dict(value) for key, value in state.properties.items()}
+    values = dict(state.values)
     current_events: list[EventRecord] = []
     episode_events = list(state.episode_events)
     execution = _EffectExecution()
@@ -111,6 +112,7 @@ def step(
                 state,
                 positions,
                 properties,
+                values,
                 current_events,
                 episode_events,
                 state.step + 1,
@@ -120,7 +122,7 @@ def step(
             )
     direct_effect_count = len(execution.states)
     for rule in program["after_action"]:
-        provisional = _state_after_effects(state, positions, properties, current_events, episode_events)
+        provisional = _state_after_effects(state, positions, properties, values, current_events, episode_events)
         if all(_condition(program, provisional, condition, {}) for condition in rule["when"]):
             for effect in rule["effects"]:
                 _effect(
@@ -128,6 +130,7 @@ def step(
                     state,
                     positions,
                     properties,
+                    values,
                     current_events,
                     episode_events,
                     state.step + 1,
@@ -138,7 +141,7 @@ def step(
     next_state = RuntimeState(
         positions=dict(positions),
         properties={key: dict(value) for key, value in properties.items()},
-        values=dict(state.values),
+        values=dict(values),
         completed_objectives=state.completed_objectives,
         current_step_events=tuple(current_events),
         episode_events=tuple(episode_events),
@@ -206,8 +209,10 @@ def _matching_action(program: JsonObject, invocation: Mapping[str, Any]) -> Json
             raise EnvironmentProgramError(f"argument {name!r} must be a direction")
         if kind == "entity" and (not isinstance(value, str) or value not in _entity_ids(program)):
             raise EnvironmentProgramError(f"argument {name!r} must name a declared entity")
-        if kind not in {"direction", "entity"}:
-            raise EnvironmentProgramError(f"unsupported parameter type in minimal runtime: {kind!r}")
+        if kind == "number" and type(value) not in {int, float}:
+            raise EnvironmentProgramError(f"argument {name!r} must be a number")
+        if kind == "string" and not isinstance(value, str):
+            raise EnvironmentProgramError(f"argument {name!r} must be a string")
     return cast(JsonObject, action)
 
 
@@ -255,6 +260,24 @@ def _condition(
         entity = _resolve(condition["entity"], arguments)
         value = _resolve(condition["value"], arguments) if isinstance(condition["value"], str) else condition["value"]
         return condition["property"] in state.properties[entity] and state.properties[entity][condition["property"]] == value
+    if operation == "value_compare":
+        actual = state.values[condition["value"]]
+        expected = _resolve(condition["expected"], arguments) if isinstance(condition["expected"], str) else condition["expected"]
+        actual_number = cast(float, actual)
+        expected_number = cast(float, expected)
+        comparator = condition["comparator"]
+        if comparator == "eq":
+            return actual_number == expected_number
+        if comparator == "ne":
+            return actual_number != expected_number
+        if comparator == "lt":
+            return actual_number < expected_number
+        if comparator == "lte":
+            return actual_number <= expected_number
+        if comparator == "gt":
+            return actual_number > expected_number
+        if comparator == "gte":
+            return actual_number >= expected_number
     raise EnvironmentProgramError(f"unsupported condition operation: {operation!r}")
 
 
@@ -263,6 +286,7 @@ def _effect(
     previous: RuntimeState,
     positions: dict[str, tuple[int, int] | None],
     properties: dict[str, dict[str, Any]],
+    values: dict[str, Any],
     current_events: list[EventRecord],
     episode_events: list[EventRecord],
     step_number: int,
@@ -281,7 +305,7 @@ def _effect(
             raise EnvironmentProgramError("nested repeat is invalid")
         while _condition(
             program,
-            _state_after_effects(previous, positions, properties, current_events, episode_events),
+            _state_after_effects(previous, positions, properties, values, current_events, episode_events),
             effect["while"],
             arguments,
         ):
@@ -295,6 +319,7 @@ def _effect(
                     previous,
                     positions,
                     properties,
+                    values,
                     current_events,
                     episode_events,
                     step_number,
@@ -312,7 +337,7 @@ def _effect(
         x, y = positions[entity] or (0, 0)
         dx, dy = DIRECTIONS[direction]
         positions[entity] = (x + dx, y + dy)
-        _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
         return
     if operation == "move_toward":
         entity = _resolve(effect["entity"], arguments)
@@ -320,7 +345,7 @@ def _effect(
         next_position = _shortest_path_step(program, positions, properties, entity, target)
         if next_position is not None:
             positions[entity] = next_position
-        _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
         return
     if operation == "set_position":
         entity = _resolve(effect["entity"], arguments)
@@ -332,7 +357,7 @@ def _effect(
             positions[entity] = positions[destination_entity]
         else:
             positions[entity] = None
-        _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
         return
     if operation == "set_property":
         entity = _resolve(effect["entity"], arguments)
@@ -341,14 +366,25 @@ def _effect(
             raise EnvironmentProgramError(f"unknown property {property_name!r} on entity {entity!r}")
         value = _resolve(effect["value"], arguments) if isinstance(effect["value"], str) else effect["value"]
         properties[entity][property_name] = value
-        _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        return
+    if operation == "set_value":
+        value_id = effect["value"]
+        values[value_id] = _resolve(effect["new_value"], arguments) if isinstance(effect["new_value"], str) else effect["new_value"]
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        return
+    if operation == "change_value":
+        value_id = effect["value"]
+        amount = _resolve(effect["amount"], arguments) if isinstance(effect["amount"], str) else effect["amount"]
+        values[value_id] += amount
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
         return
     if operation == "emit":
         target = _resolve(effect["target"], arguments) if "target" in effect else None
         event = EventRecord(effect["event"], target, step_number)
         current_events.append(event)
         episode_events.append(event)
-        _record_effect_state(previous, positions, properties, current_events, episode_events, execution)
+        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
         return
     raise EnvironmentProgramError(f"unsupported effect operation: {operation!r}")
 
@@ -357,6 +393,7 @@ def _record_effect_state(
     previous: RuntimeState,
     positions: Mapping[str, tuple[int, int] | None],
     properties: Mapping[str, Mapping[str, Any]],
+    values: Mapping[str, Any],
     current_events: list[EventRecord],
     episode_events: list[EventRecord],
     execution: _EffectExecution,
@@ -366,6 +403,7 @@ def _record_effect_state(
             previous,
             dict(positions),
             {entity: dict(entity_properties) for entity, entity_properties in properties.items()},
+            dict(values),
             current_events,
             episode_events,
         )
@@ -376,13 +414,14 @@ def _state_after_effects(
     previous: RuntimeState,
     positions: Mapping[str, tuple[int, int] | None],
     properties: Mapping[str, Mapping[str, Any]],
+    values: Mapping[str, Any],
     current_events: list[EventRecord],
     episode_events: list[EventRecord],
 ) -> RuntimeState:
     return RuntimeState(
         positions=positions,
         properties=properties,
-        values=previous.values,
+        values=values,
         completed_objectives=previous.completed_objectives,
         current_step_events=tuple(current_events),
         episode_events=tuple(episode_events),

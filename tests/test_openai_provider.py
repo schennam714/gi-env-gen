@@ -22,6 +22,7 @@ from .fixtures import (
     pursuit_build_response,
     push_trigger_build_response,
     reach_build_response,
+    timed_build_response,
 )
 
 
@@ -132,6 +133,7 @@ def test_every_supported_fixture_satisfies_its_generated_strict_schema() -> None
         possession_prerequisite_build_response(),
         bounded_repeat_build_response(),
         pursuit_build_response(),
+        timed_build_response(),
     )
     observed_conditions: set[str] = set()
     observed_effects: set[str] = set()

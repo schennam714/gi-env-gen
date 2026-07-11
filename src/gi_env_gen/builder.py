@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 
 from .model import FrozenEnvironment, JsonObject, freeze_environment
 from .runtime import EffectLimitExceeded, EnvironmentProgramError, Transition, _condition, start, step
@@ -243,8 +243,12 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         entity_properties[declaration["id"]] = set(props)
     if len(ids) != len(set(ids)) or program["actor"] not in ids:
         return Diagnostic("references", "INVALID_ACTOR_OR_ENTITY_IDS", "environment.actor", "Actor must name a unique entity.")
-    if program["values"] != {}:
-        return Diagnostic("shape", "OUTSIDE_CURRENT_VOCABULARY", "environment.values", "This slice requires empty values.")
+    if not isinstance(program["values"], dict) or any(
+        not isinstance(name, str) or not _scalar(value)
+        for name, value in program["values"].items()
+    ):
+        return Diagnostic("shape", "INVALID_VALUES", "environment.values", "Values must be named scalar values.")
+    values = cast(dict[str, Any], program["values"])
     if not isinstance(program["actions"], list) or not program["actions"]:
         return Diagnostic("shape", "INVALID_ACTIONS", "environment.actions", "At least one action is required.")
     action_names: set[str] = set()
@@ -256,17 +260,17 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
             return Diagnostic("shape", "INVALID_ACTION_NAME", path, "Action names must be unique strings.")
         action_names.add(action["name"])
         parameters = action["parameters"]
-        if not isinstance(parameters, dict) or any(kind not in {"direction", "entity"} for kind in parameters.values()):
-            return Diagnostic("shape", "INVALID_PARAMETERS", path + ".parameters", "Actions accept entity and direction parameters in this slice.")
+        if not isinstance(parameters, dict) or any(kind not in {"direction", "entity", "number", "string"} for kind in parameters.values()):
+            return Diagnostic("shape", "INVALID_PARAMETERS", path + ".parameters", "Actions accept direction, entity, number, and string parameters.")
         if not isinstance(action["allowed_when"], list) or not isinstance(action["effects"], list):
             return Diagnostic("shape", "INVALID_ACTION_RULES", path, "Conditions and effects must be arrays.")
         for condition_index, condition in enumerate(action["allowed_when"]):
-            error = _validate_condition(condition, ids, entity_properties, parameters, f"{path}.allowed_when[{condition_index}]")
+            error = _validate_condition(condition, ids, entity_properties, values, parameters, f"{path}.allowed_when[{condition_index}]")
             if error:
                 return error
         for effect_index, effect in enumerate(action["effects"]):
             effect_path = f"{path}.effects[{effect_index}]"
-            error = _validate_effect(effect, ids, entity_properties, parameters, effect_path)
+            error = _validate_effect(effect, ids, entity_properties, values, parameters, effect_path)
             if error:
                 return error
     if not isinstance(program["after_action"], list):
@@ -282,11 +286,11 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         if not isinstance(rule["when"], list) or not isinstance(rule["effects"], list):
             return Diagnostic("shape", "INVALID_AFTER_ACTION", path, "Conditions and effects must be arrays.")
         for condition_index, condition in enumerate(rule["when"]):
-            error = _validate_condition(condition, ids, entity_properties, {}, f"{path}.when[{condition_index}]")
+            error = _validate_condition(condition, ids, entity_properties, values, {}, f"{path}.when[{condition_index}]")
             if error:
                 return error
         for effect_index, effect in enumerate(rule["effects"]):
-            error = _validate_effect(effect, ids, entity_properties, {}, f"{path}.effects[{effect_index}]")
+            error = _validate_effect(effect, ids, entity_properties, values, {}, f"{path}.effects[{effect_index}]")
             if error:
                 return error
     if not isinstance(program["objectives"], list) or not program["objectives"]:
@@ -299,7 +303,7 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         if not isinstance(objective["id"], str) or objective["id"] in objective_ids or not isinstance(objective["description"], str):
             return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Objective IDs must be unique and descriptions textual.")
         objective_ids.add(objective["id"])
-        error = _validate_condition(objective["satisfied_when"], ids, entity_properties, {}, path + ".satisfied_when")
+        error = _validate_condition(objective["satisfied_when"], ids, entity_properties, values, {}, path + ".satisfied_when")
         if error:
             return error
     if not isinstance(program["failures"], list):
@@ -316,7 +320,7 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         ):
             return Diagnostic("shape", "INVALID_FAILURE", path, "Failure IDs must be unique and descriptions textual.")
         failure_ids.add(failure["id"])
-        error = _validate_condition(failure["when"], ids, entity_properties, {}, path + ".when")
+        error = _validate_condition(failure["when"], ids, entity_properties, values, {}, path + ".when")
         if error:
             return error
     return None
@@ -326,6 +330,7 @@ def _validate_condition(
     condition: Any,
     ids: list[str],
     entity_properties: Mapping[str, set[str]],
+    values: Mapping[str, Any],
     parameters: Mapping[str, Any],
     path: str,
 ) -> Diagnostic | None:
@@ -340,6 +345,7 @@ def _validate_condition(
                 child,
                 ids,
                 entity_properties,
+                values,
                 parameters,
                 f"{path}.conditions[{index}]",
             )
@@ -353,6 +359,7 @@ def _validate_condition(
             condition["condition"],
             ids,
             entity_properties,
+            values,
             parameters,
             path + ".condition",
         )
@@ -362,8 +369,10 @@ def _validate_condition(
         expected = {"operation", "first", "second"} | ({"direction"} if "direction" in condition else set())
     elif operation == "can_move":
         expected = {"operation", "entity", "direction"}
-    else:
+    elif operation == "property_equals":
         expected = {"operation", "entity", "property", "value"}
+    else:
+        expected = {"operation", "value", "comparator", "expected"}
     if set(condition) != expected:
         return Diagnostic("shape", "INVALID_CONDITION", path, "Condition fields do not match its operation.")
     if operation in {"at", "adjacent"}:
@@ -375,6 +384,21 @@ def _validate_condition(
         return None
     if operation == "can_move":
         return _validate_entity_and_direction(condition, ids, parameters, path)
+    if operation == "value_compare":
+        value_id = condition["value"]
+        if not isinstance(value_id, str) or value_id not in values:
+            return Diagnostic("references", "UNKNOWN_VALUE", path + ".value", "Unknown global value.")
+        if not _numeric(values[value_id]):
+            return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".value", "Compared values must be numeric.")
+        if condition["comparator"] not in {"eq", "ne", "lt", "lte", "gt", "gte"}:
+            return Diagnostic("shape", "INVALID_COMPARATOR", path + ".comparator", "Unknown value comparator.")
+        expected_value = condition["expected"]
+        if isinstance(expected_value, str) and expected_value.startswith("$"):
+            if parameters.get(expected_value[1:]) != "number":
+                return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + ".expected", "Expected a numeric parameter reference.")
+        elif not _numeric(expected_value):
+            return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".expected", "Expected value must be numeric.")
+        return None
     entity = condition["entity"]
     if not _entity_reference(entity, ids, parameters):
         return Diagnostic("references", "UNKNOWN_ENTITY", path + ".entity", "Unknown entity reference.")
@@ -407,6 +431,7 @@ def _validate_effect(
     effect: Any,
     ids: list[str],
     entity_properties: Mapping[str, set[str]],
+    values: Mapping[str, Any],
     parameters: Mapping[str, Any],
     path: str,
     *,
@@ -424,6 +449,7 @@ def _validate_effect(
             effect["while"],
             ids,
             entity_properties,
+            values,
             parameters,
             path + ".while",
         )
@@ -434,6 +460,7 @@ def _validate_effect(
                 child,
                 ids,
                 entity_properties,
+                values,
                 parameters,
                 f"{path}.effects[{index}]",
                 allow_repeat=False,
@@ -509,6 +536,26 @@ def _validate_effect(
         if effect["property"] == "solid" and type(effect["value"]) is not bool:
             return Diagnostic("shape", "INVALID_SOLID_VALUE", path + ".value", "solid must remain boolean.")
         return None
+    if operation in {"set_value", "change_value"}:
+        expected_fields = {"operation", "value", "new_value" if operation == "set_value" else "amount"}
+        if set(effect) != expected_fields:
+            return Diagnostic("shape", "INVALID_EFFECT", path, f"Invalid {operation} effect shape.")
+        value_id = effect["value"]
+        if not isinstance(value_id, str) or value_id not in values:
+            return Diagnostic("references", "UNKNOWN_VALUE", path + ".value", "Unknown global value.")
+        field = "new_value" if operation == "set_value" else "amount"
+        new_value = effect[field]
+        if isinstance(new_value, str) and new_value.startswith("$"):
+            parameter_type = parameters.get(new_value[1:])
+            required_type = "number" if operation == "change_value" else _parameter_type(values[value_id])
+            if parameter_type != required_type:
+                return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + "." + field, "Invalid or incompatible parameter reference.")
+        elif operation == "change_value":
+            if not _numeric(values[value_id]) or not _numeric(new_value):
+                return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path, "change_value requires numeric values.")
+        elif not (_numeric(new_value) and _numeric(values[value_id])) and type(new_value) is not type(values[value_id]):
+            return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".new_value", "set_value must preserve the declared value type.")
+        return None
     expected = {"operation", "event"} | ({"target"} if "target" in effect else set())
     if set(effect) != expected or not isinstance(effect["event"], str):
         return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid emit effect shape.")
@@ -538,6 +585,18 @@ def _scalar_or_parameter(value: Any, parameters: Mapping[str, Any]) -> bool:
 
 def _scalar(value: Any) -> bool:
     return value is None or isinstance(value, (bool, int, float, str))
+
+
+def _numeric(value: Any) -> bool:
+    return type(value) in {int, float}
+
+
+def _parameter_type(value: Any) -> str | None:
+    if _numeric(value):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    return None
 
 
 def _strings(value: Any) -> bool:
