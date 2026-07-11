@@ -80,13 +80,13 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets that 
 
 **Blocked by:** Generate a state-changing push-and-trigger puzzle.
 
-- [ ] Interpret all, any, and not condition composition.
-- [ ] Interpret repeat with condition re-evaluation after each child-effect pass.
-- [ ] Reject nested repeat.
-- [ ] Enforce at most 100 total effect applications across the action and its after-action rules.
-- [ ] Attribute limit exhaustion to the generated environment program rather than the acting policy.
-- [ ] Replay a generated sliding solution and show every intermediate state change in validation evidence.
-- [ ] Prove through tests that repeated movement is expressed by generated rules rather than a runtime slide mechanic.
+- [x] Interpret all, any, and not condition composition.
+- [x] Interpret repeat with condition re-evaluation after each child-effect pass.
+- [x] Reject nested repeat.
+- [x] Enforce at most 100 total effect applications across the action and its after-action rules.
+- [x] Attribute limit exhaustion to the generated environment program rather than the acting policy.
+- [x] Replay a generated sliding solution and show every intermediate state change in validation evidence.
+- [x] Prove through tests that repeated movement is expressed by generated rules rather than a runtime slide mechanic.
 
 
 

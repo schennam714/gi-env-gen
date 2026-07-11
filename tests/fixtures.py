@@ -348,3 +348,92 @@ def possession_prerequisite_build_response() -> dict[str, Any]:
             {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
         ],
     }
+
+
+def bounded_repeat_build_response() -> dict[str, Any]:
+    """A provider-fake repeated-movement composition, not a mechanic template."""
+    return {
+        "status": "generated",
+        "interpretation": [
+            "The explorer's generated action repeatedly moves while its generated condition remains true.",
+            "The explorer must stop at the goal before the wall.",
+        ],
+        "environment": {
+            "actor": "explorer",
+            "map": ["#########", "#A.....E#", "#########"],
+            "legend": {
+                "A": {"id": "explorer", "properties": {"symbol": "@", "solid": True}},
+                "E": {"id": "goal", "properties": {"symbol": "E", "solid": False}},
+            },
+            "values": {},
+            "actions": [
+                {
+                    "name": "GLIDE",
+                    "parameters": {"heading": "direction"},
+                    "allowed_when": [],
+                    "effects": [
+                        {
+                            "operation": "repeat",
+                            "while": {
+                                "operation": "all",
+                                "conditions": [
+                                    {
+                                        "operation": "any",
+                                        "conditions": [
+                                            {
+                                                "operation": "at",
+                                                "first": "explorer",
+                                                "second": "goal",
+                                            },
+                                            {
+                                                "operation": "can_move",
+                                                "entity": "explorer",
+                                                "direction": "$heading",
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "operation": "not",
+                                        "condition": {
+                                            "operation": "at",
+                                            "first": "explorer",
+                                            "second": "goal",
+                                        },
+                                    },
+                                ],
+                            },
+                            "effects": [
+                                {
+                                    "operation": "move",
+                                    "entity": "explorer",
+                                    "direction": "$heading",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "name": "LOOP",
+                    "parameters": {},
+                    "allowed_when": [],
+                    "effects": [
+                        {
+                            "operation": "repeat",
+                            "while": {"operation": "all", "conditions": []},
+                            "effects": [{"operation": "emit", "event": "looped"}],
+                        }
+                    ],
+                },
+            ],
+            "after_action": [],
+            "objectives": [
+                {
+                    "id": "reach_goal",
+                    "description": "Reach the goal.",
+                    "satisfied_when": {"operation": "at", "first": "explorer", "second": "goal"},
+                }
+            ],
+            "failures": [],
+        },
+        "solution": [{"action": "GLIDE", "arguments": {"heading": "RIGHT"}}],
+    }

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from .model import FrozenEnvironment, JsonObject, freeze_environment
-from .runtime import EnvironmentProgramError, Transition, _condition, start, step
+from .runtime import EffectLimitExceeded, EnvironmentProgramError, Transition, _condition, start, step
 
 
 class BuilderProvider(Protocol):
@@ -143,6 +143,13 @@ def _validate_response(
     for index, invocation in enumerate(solution):
         try:
             transition = step(frozen, state, invocation)
+        except EffectLimitExceeded as error:
+            return _failure(
+                "solution_replay",
+                "EFFECT_LIMIT_EXCEEDED",
+                f"solution[{index}]",
+                str(error),
+            )
         except (KeyError, TypeError, EnvironmentProgramError) as error:
             return _failure("solution_replay", "INVALID_SOLUTION", f"solution[{index}]", str(error))
         if not transition.applicable:
@@ -275,9 +282,41 @@ def _validate_condition(
     parameters: Mapping[str, Any],
     path: str,
 ) -> Diagnostic | None:
-    if not isinstance(condition, dict) or condition.get("operation") not in {"at", "adjacent", "can_move", "property_equals"}:
+    if not isinstance(condition, dict) or condition.get("operation") not in {
+        "all",
+        "any",
+        "not",
+        "at",
+        "adjacent",
+        "can_move",
+        "property_equals",
+    }:
         return Diagnostic("shape", "INVALID_CONDITION", path, "Unsupported condition operation.")
     operation = condition["operation"]
+    if operation in {"all", "any"}:
+        if set(condition) != {"operation", "conditions"} or not isinstance(condition["conditions"], list):
+            return Diagnostic("shape", "INVALID_CONDITION", path, "Boolean conditions require a conditions array.")
+        for index, child in enumerate(condition["conditions"]):
+            error = _validate_condition(
+                child,
+                ids,
+                entity_properties,
+                parameters,
+                f"{path}.conditions[{index}]",
+            )
+            if error:
+                return error
+        return None
+    if operation == "not":
+        if set(condition) != {"operation", "condition"}:
+            return Diagnostic("shape", "INVALID_CONDITION", path, "not requires exactly one condition.")
+        return _validate_condition(
+            condition["condition"],
+            ids,
+            entity_properties,
+            parameters,
+            path + ".condition",
+        )
     if operation == "at":
         expected = {"operation", "first", "second"}
     elif operation == "adjacent":
@@ -331,15 +370,44 @@ def _validate_effect(
     entity_properties: Mapping[str, set[str]],
     parameters: Mapping[str, Any],
     path: str,
+    *,
+    allow_repeat: bool = True,
 ) -> Diagnostic | None:
     if not isinstance(effect, dict) or effect.get("operation") not in {
         "move",
         "set_position",
         "set_property",
         "emit",
+        "repeat",
     }:
         return Diagnostic("shape", "INVALID_EFFECT", path, "Unsupported effect operation.")
     operation = effect["operation"]
+    if operation == "repeat":
+        if not allow_repeat:
+            return Diagnostic("shape", "NESTED_REPEAT", path, "repeat cannot contain repeat.")
+        if set(effect) != {"operation", "while", "effects"} or not isinstance(effect["effects"], list):
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid repeat effect shape.")
+        error = _validate_condition(
+            effect["while"],
+            ids,
+            entity_properties,
+            parameters,
+            path + ".while",
+        )
+        if error:
+            return error
+        for index, child in enumerate(effect["effects"]):
+            error = _validate_effect(
+                child,
+                ids,
+                entity_properties,
+                parameters,
+                f"{path}.effects[{index}]",
+                allow_repeat=False,
+            )
+            if error:
+                return error
+        return None
     if operation == "move":
         if set(effect) != {"operation", "entity", "direction"}:
             return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid move effect shape.")

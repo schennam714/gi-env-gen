@@ -29,6 +29,8 @@ parameters is a JSON object, never an array. The only generic conditions are:
 - {operation:'adjacent', first:<entity ref>, second:<entity ref>, optional direction:<direction ref>}
 - {operation:'can_move', entity:<entity id>, direction:<literal or $parameter>}
 - {operation:'property_equals', entity:<entity ref>, property:<declared property>, value:<scalar>}
+Conditions may compose recursively as {operation:'all' or 'any', conditions:[...]}
+or {operation:'not', condition:<condition>}.
 The generic effects are move; set_property on an existing property; emit with an
 event string and optional entity target; and set_position shaped exactly as
 {operation:'set_position', entity:<entity ref>, destination:<[x,y], entity ref, or null>}.
@@ -39,6 +41,11 @@ inside their declaring action.
 Directions are exactly "UP", "RIGHT", "DOWN", or "LEFT". Possession and access must
 be authored from these generic positions and builder-chosen properties; there is no
 built-in inventory, collection, key, or door behavior.
+repeat is shaped exactly as {operation:'repeat', while:<condition>, effects:[<effect>, ...]}.
+It re-evaluates while after every complete child-effect pass, cannot contain another
+repeat, and shares a limit of 100 total effect applications with the action's other
+effects and all after_action effects. Repeated movement must be authored from repeat
+and move; the runtime has no sliding or conveyor mechanic.
 
 after_action contains rules shaped {"id":<string>, "when":[<condition>, ...],
 "effects":[<effect>, ...]}. They run once in declared order after every well-formed
