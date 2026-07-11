@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gi-env-gen"
+version = "0.1.0"
+description = "LLM-authored deterministic 2D environment harness"
+requires-python = ">=3.11"
+dependencies = ["openai>=1.30"]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.10", "pytest>=8"]
+
+[project.scripts]
+gi-env-gen = "gi_env_gen.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["gi_env_gen"]
+
