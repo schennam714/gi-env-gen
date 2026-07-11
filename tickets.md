@@ -64,13 +64,13 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets that 
 
 **Blocked by:** Generate a state-changing push-and-trigger puzzle.
 
-- [ ] Interpret set_position for exact coordinates, another entity's position, and null.
-- [ ] Remove null-position entities from rendering while retaining their properties in authoritative state.
-- [ ] Allow generated actions to express possession through builder-chosen properties such as held_by.
-- [ ] Allow a generated access action to test possession and change an obstacle's properties.
-- [ ] Validate that every generated property and entity reference exists and has a compatible type.
-- [ ] Prove a generated prerequisite solution through replay without any runtime branch named for inventory, keys, doors, or collection.
-- [ ] Show the acting LLM off-map entities and relevant properties in its complete current observation.
+- [x] Interpret set_position for exact coordinates, another entity's position, and null.
+- [x] Remove null-position entities from rendering while retaining their properties in authoritative state.
+- [x] Allow generated actions to express possession through builder-chosen properties such as held_by.
+- [x] Allow a generated access action to test possession and change an obstacle's properties.
+- [x] Validate that every generated property and entity reference exists and has a compatible type.
+- [x] Prove a generated prerequisite solution through replay without any runtime branch named for inventory, keys, doors, or collection.
+- [x] Show the acting LLM off-map entities and relevant properties in its complete current observation.
 
 
 

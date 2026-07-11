@@ -109,7 +109,7 @@ def step(
         status="running",
         failure_id=None,
     )
-    _validate_runtime_state(next_state)
+    _validate_runtime_state(program, next_state)
     completed = list(next_state.completed_objectives)
     for objective in program["objectives"][len(completed) :]:
         if not _condition(program, next_state, objective["satisfied_when"], {}):
@@ -205,6 +205,17 @@ def _effect(
         dx, dy = DIRECTIONS[direction]
         positions[entity] = (x + dx, y + dy)
         return
+    if operation == "set_position":
+        entity = _resolve(effect["entity"], arguments)
+        destination = effect["destination"]
+        if isinstance(destination, list):
+            positions[entity] = (destination[0], destination[1])
+        elif isinstance(destination, str):
+            destination_entity = _resolve(destination, arguments)
+            positions[entity] = positions[destination_entity]
+        else:
+            positions[entity] = None
+        return
     if operation == "set_property":
         entity = _resolve(effect["entity"], arguments)
         property_name = effect["property"]
@@ -246,8 +257,9 @@ def _entity_ids(program: JsonObject) -> set[str]:
     return {declaration["id"] for declaration in program["legend"].values()}
 
 
-def _validate_runtime_state(state: RuntimeState) -> None:
+def _validate_runtime_state(program: JsonObject, state: RuntimeState) -> None:
     solid_positions: set[tuple[int, int]] = set()
+    width, height = len(program["map"][0]), len(program["map"])
     for entity, properties in state.properties.items():
         symbol = properties.get("symbol")
         if not isinstance(symbol, str) or len(symbol) != 1 or not 0x20 <= ord(symbol) <= 0x7E:
@@ -255,6 +267,12 @@ def _validate_runtime_state(state: RuntimeState) -> None:
         if type(properties.get("solid")) is not bool:
             raise EnvironmentProgramError(f"entity {entity!r} has an invalid solid property")
         position = state.positions[entity]
+        if position is not None:
+            x, y = position
+            if not (0 <= x < width and 0 <= y < height):
+                raise EnvironmentProgramError(f"entity {entity!r} is outside the map")
+            if program["map"][y][x] == "#":
+                raise EnvironmentProgramError(f"entity {entity!r} is positioned on a wall")
         if properties["solid"] is True and position is not None:
             if position in solid_positions:
                 raise EnvironmentProgramError("two solid entities cannot share a position")

@@ -29,10 +29,16 @@ parameters is a JSON object, never an array. The only generic conditions are:
 - {operation:'adjacent', first:<entity ref>, second:<entity ref>, optional direction:<direction ref>}
 - {operation:'can_move', entity:<entity id>, direction:<literal or $parameter>}
 - {operation:'property_equals', entity:<entity ref>, property:<declared property>, value:<scalar>}
-The generic effects are move, set_property on an existing property, and emit with an
-event string and optional entity target. Entity and direction references may use a
-matching $parameter inside their declaring action. Directions are exactly "UP",
-"RIGHT", "DOWN", or "LEFT".
+The generic effects are move; set_property on an existing property; emit with an
+event string and optional entity target; and set_position shaped exactly as
+{operation:'set_position', entity:<entity ref>, destination:<[x,y], entity ref, or null>}.
+set_position uses an exact coordinate, copies another entity's current position, or
+removes the entity from the grid with null while retaining all of its declared
+properties in state. Entity and direction references may use a matching $parameter
+inside their declaring action.
+Directions are exactly "UP", "RIGHT", "DOWN", or "LEFT". Possession and access must
+be authored from these generic positions and builder-chosen properties; there is no
+built-in inventory, collection, key, or door behavior.
 
 after_action contains rules shaped {"id":<string>, "when":[<condition>, ...],
 "effects":[<effect>, ...]}. They run once in declared order after every well-formed

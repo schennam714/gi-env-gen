@@ -204,3 +204,147 @@ def push_trigger_build_response() -> dict[str, Any]:
             {"action": "NAVIGATE", "arguments": {"heading": "DOWN"}},
         ],
     }
+
+
+def possession_prerequisite_build_response() -> dict[str, Any]:
+    """A provider-fake generic possession composition, not a mechanic template."""
+    return {
+        "status": "generated",
+        "interpretation": [
+            "The explorer must claim the token, changing its location and ownership state.",
+            "The sealed barrier changes only while the token is held before the explorer reaches the goal.",
+        ],
+        "environment": {
+            "actor": "explorer",
+            "map": ["#########", "#A.KD..E#", "#########"],
+            "legend": {
+                "A": {"id": "explorer", "properties": {"symbol": "@", "solid": True}},
+                "K": {
+                    "id": "token",
+                    "properties": {"symbol": "k", "solid": False, "held_by": None},
+                },
+                "D": {
+                    "id": "barrier",
+                    "properties": {"symbol": "D", "solid": True, "sealed": True},
+                },
+                "E": {"id": "goal", "properties": {"symbol": "E", "solid": False}},
+            },
+            "values": {},
+            "actions": [
+                {
+                    "name": "ADVANCE",
+                    "parameters": {"heading": "direction"},
+                    "allowed_when": [
+                        {
+                            "operation": "can_move",
+                            "entity": "explorer",
+                            "direction": "$heading",
+                        }
+                    ],
+                    "effects": [
+                        {"operation": "move", "entity": "explorer", "direction": "$heading"}
+                    ],
+                },
+                {
+                    "name": "CLAIM",
+                    "parameters": {},
+                    "allowed_when": [
+                        {"operation": "adjacent", "first": "explorer", "second": "token"},
+                        {
+                            "operation": "property_equals",
+                            "entity": "token",
+                            "property": "held_by",
+                            "value": None,
+                        },
+                    ],
+                    "effects": [
+                        {"operation": "set_position", "entity": "token", "destination": None},
+                        {
+                            "operation": "set_property",
+                            "entity": "token",
+                            "property": "held_by",
+                            "value": "explorer",
+                        },
+                    ],
+                },
+                {
+                    "name": "CHANGE_ACCESS",
+                    "parameters": {},
+                    "allowed_when": [
+                        {"operation": "adjacent", "first": "explorer", "second": "barrier"},
+                        {
+                            "operation": "property_equals",
+                            "entity": "token",
+                            "property": "held_by",
+                            "value": "explorer",
+                        },
+                        {
+                            "operation": "property_equals",
+                            "entity": "barrier",
+                            "property": "sealed",
+                            "value": True,
+                        },
+                    ],
+                    "effects": [
+                        {
+                            "operation": "set_property",
+                            "entity": "barrier",
+                            "property": "sealed",
+                            "value": False,
+                        },
+                        {
+                            "operation": "set_property",
+                            "entity": "barrier",
+                            "property": "solid",
+                            "value": False,
+                        },
+                        {
+                            "operation": "set_property",
+                            "entity": "barrier",
+                            "property": "symbol",
+                            "value": "/",
+                        },
+                    ],
+                },
+            ],
+            "after_action": [],
+            "objectives": [
+                {
+                    "id": "hold_token",
+                    "description": "Make the token held by the explorer.",
+                    "satisfied_when": {
+                        "operation": "property_equals",
+                        "entity": "token",
+                        "property": "held_by",
+                        "value": "explorer",
+                    },
+                },
+                {
+                    "id": "change_access",
+                    "description": "Change the sealed barrier.",
+                    "satisfied_when": {
+                        "operation": "property_equals",
+                        "entity": "barrier",
+                        "property": "sealed",
+                        "value": False,
+                    },
+                },
+                {
+                    "id": "reach_goal",
+                    "description": "Reach the goal.",
+                    "satisfied_when": {"operation": "at", "first": "explorer", "second": "goal"},
+                },
+            ],
+            "failures": [],
+        },
+        "solution": [
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "CLAIM", "arguments": {}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "CHANGE_ACCESS", "arguments": {}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+            {"action": "ADVANCE", "arguments": {"heading": "RIGHT"}},
+        ],
+    }

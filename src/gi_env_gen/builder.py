@@ -304,6 +304,12 @@ def _validate_condition(
         return Diagnostic("shape", "INVALID_PROPERTY", path + ".property", "Property name must be a string.")
     if entity in ids and condition["property"] not in entity_properties[entity]:
         return Diagnostic("references", "UNKNOWN_PROPERTY", path + ".property", "Unknown entity property.")
+    if (
+        isinstance(entity, str)
+        and entity.startswith("$")
+        and not any(condition["property"] in properties for properties in entity_properties.values())
+    ):
+        return Diagnostic("references", "UNKNOWN_PROPERTY", path + ".property", "Unknown entity property.")
     if not _scalar_or_parameter(condition["value"], parameters):
         return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + ".value", "Invalid scalar or parameter reference.")
     return None
@@ -326,13 +332,47 @@ def _validate_effect(
     parameters: Mapping[str, Any],
     path: str,
 ) -> Diagnostic | None:
-    if not isinstance(effect, dict) or effect.get("operation") not in {"move", "set_property", "emit"}:
+    if not isinstance(effect, dict) or effect.get("operation") not in {
+        "move",
+        "set_position",
+        "set_property",
+        "emit",
+    }:
         return Diagnostic("shape", "INVALID_EFFECT", path, "Unsupported effect operation.")
     operation = effect["operation"]
     if operation == "move":
         if set(effect) != {"operation", "entity", "direction"}:
             return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid move effect shape.")
         return _validate_entity_and_direction(effect, ids, parameters, path)
+    if operation == "set_position":
+        if set(effect) != {"operation", "entity", "destination"}:
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid set_position effect shape.")
+        if not _entity_reference(effect["entity"], ids, parameters):
+            return Diagnostic("references", "UNKNOWN_ENTITY", path + ".entity", "Unknown entity reference.")
+        destination = effect["destination"]
+        if destination is None:
+            return None
+        if isinstance(destination, str):
+            if not _entity_reference(destination, ids, parameters):
+                return Diagnostic(
+                    "references",
+                    "UNKNOWN_ENTITY",
+                    path + ".destination",
+                    "Unknown entity reference.",
+                )
+            return None
+        if (
+            not isinstance(destination, list)
+            or len(destination) != 2
+            or any(type(coordinate) is not int for coordinate in destination)
+        ):
+            return Diagnostic(
+                "shape",
+                "INVALID_POSITION",
+                path + ".destination",
+                "Position must be a two-integer coordinate, entity reference, or null.",
+            )
+        return None
     if operation == "set_property":
         if set(effect) != {"operation", "entity", "property", "value"}:
             return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid set_property effect shape.")
