@@ -4,61 +4,54 @@ import json
 import os
 from typing import Any
 
-from .builder import BuildRequest
+from .builder import BuildRequest, CandidateRejected, Diagnostic
 from .model import JsonObject
+from .structured_output import (
+    MANIFEST_SCHEMA,
+    build_response_schema,
+    manifest_mismatch,
+    validate_manifest,
+)
 
 DEFAULT_MODEL = "gpt-5.6"
 
+MANIFEST_INSTRUCTIONS = """You are planning the names for a deterministic 2D rule environment.
+If the request is unsupported, provide its interpretation and reason. Otherwise, list
+every generated source-map token and entity ID, every property name on each entity,
+and every generated action name and parameter name/type. Every entity must list symbol
+and solid. Entity tokens are one printable character and cannot be # or .. This manifest
+fixes the dynamic keys for the complete response but does not
+replace the complete environment program or proposed solution returned next.
+"""
+
 BUILDER_INSTRUCTIONS = """You are the builder for a deterministic 2D rule environment.
-Return JSON only. Either return {status:'unsupported', interpretation:[...], reason:'...'}
-or {status:'generated', interpretation:[...], environment:{...}, solution:[...]}.
-Use exactly those top-level keys and no others.
+Return the complete response using exactly the names fixed by the supplied manifest.
+For a generated response, author the map, entity property values, actions, automatic
+rules, objectives, and proposed solution. For an unsupported response, explain why the
+request cannot be represented exactly. The complete response's interpretation is the
+authoritative wording used by validation and any later repair.
 
-For this minimal slice, environment must contain actor, map, legend, values, actions,
-after_action, objectives, and failures. Map rows are rectangular ASCII; # is wall and .
-is floor. Every other one-character token occurs once and maps through legend to an
-entity with id and properties containing one-character symbol and boolean solid.
-Additional builder-chosen properties may be boolean, number, string, or null. values
-and failures must be empty in this slice.
+Map rows are rectangular ASCII; # is wall and . is floor. Every other source token
+occurs once. Entity symbol is one printable character and solid is boolean. Additional
+builder-chosen properties may be boolean, number, string, or null. Global values and
+failures remain empty in the currently supported vocabulary.
 
-You author action names. Every action has exactly this shape:
-{"name":<string>, "parameters":{<parameter name>:"direction" or "entity"},
-"allowed_when":[<condition>, ...], "effects":[<effect>, ...]}.
-parameters is a JSON object, never an array. The only generic conditions are:
-- {operation:'at', first:<entity id>, second:<entity id>}
-- {operation:'adjacent', first:<entity ref>, second:<entity ref>, optional direction:<direction ref>}
-- {operation:'can_move', entity:<entity id>, direction:<literal or $parameter>}
-- {operation:'property_equals', entity:<entity ref>, property:<declared property>, value:<scalar>}
-Conditions may compose recursively as {operation:'all' or 'any', conditions:[...]}
-or {operation:'not', condition:<condition>}.
-The generic effects are move; set_property on an existing property; emit with an
-event string and optional entity target; and set_position shaped exactly as
-{operation:'set_position', entity:<entity ref>, destination:<[x,y], entity ref, or null>}.
-set_position uses an exact coordinate, copies another entity's current position, or
-removes the entity from the grid with null while retaining all of its declared
-properties in state. Entity and direction references may use a matching $parameter
-inside their declaring action.
-Directions are exactly "UP", "RIGHT", "DOWN", or "LEFT". Possession and access must
-be authored from these generic positions and builder-chosen properties; there is no
-built-in inventory, collection, key, or door behavior.
-repeat is shaped exactly as {operation:'repeat', while:<condition>, effects:[<effect>, ...]}.
-It re-evaluates while after every complete child-effect pass, cannot contain another
-repeat, and shares a limit of 100 total effect applications with the action's other
-effects and all after_action effects. Repeated movement must be authored from repeat
-and move; the runtime has no sliding or conveyor mechanic.
+The conditions are at, adjacent, can_move, property_equals, and recursive all, any,
+and not composition. The effects are move, set_position, set_property, emit, and
+repeat. set_position sets coordinates, copies another entity's position, or uses null
+to remove an entity from rendering while preserving its properties. repeat rechecks
+its condition after each complete child-effect pass, cannot nest, and shares the
+100-effect turn limit with direct and automatic effects. References beginning with $
+resolve a matching action parameter. Directions are UP, RIGHT, DOWN, or LEFT.
 
-after_action contains rules shaped {"id":<string>, "when":[<condition>, ...],
-"effects":[<effect>, ...]}. They run once in declared order after every well-formed
-action attempt. Effects run sequentially. The runtime has no fixed MOVE, PUSH,
-crate, plate, or gate mechanic.
+Automatic rules run once in declared order after every well-formed action attempt,
+and effects run sequentially. Possession, access, pushing, triggering, and repeated
+movement must be composed from generic operations; none is a runtime mechanic.
 
-Objectives are ordered objects shaped exactly {"id":<string>, "description":<string>,
-"satisfied_when":<one condition object>}; satisfied_when is never an array. Every
-solution item is exactly {"action":<generated action name>, "arguments":{<declared
-parameter name>:<typed value>}}. Supply a solution that deterministically reaches
-success. No objective may be true initially. If the request cannot be represented
-exactly, return unsupported; do not approximate. Interpretation is visible, fallible
-model judgment.
+Objectives are ordered and no objective may be true initially. Supply a proposed
+solution that deterministically reaches success. If the request cannot be represented
+exactly, return unsupported; never approximate. Interpretation remains visible,
+fallible model judgment.
 
 The input is a complete stateless build request. On repair, preserve
 frozen_interpretation exactly, inspect the complete previous_response and diagnostics,
@@ -99,10 +92,57 @@ class OpenAIProvider:
             "previous_response": request.previous_response,
             "diagnostics": [diagnostic.__dict__ for diagnostic in request.diagnostics],
         }
-        return self._json_response(BUILDER_INSTRUCTIONS, json.dumps(payload, sort_keys=True))
+        manifest = self._structured_response(
+            MANIFEST_INSTRUCTIONS,
+            json.dumps(payload, sort_keys=True),
+            name="builder_manifest",
+            schema=MANIFEST_SCHEMA,
+        )
+        validate_manifest(manifest)
+        response = self._structured_response(
+            BUILDER_INSTRUCTIONS,
+            json.dumps({"build_request": payload, "manifest": manifest}, sort_keys=True),
+            name=(
+                "generated_build_response"
+                if manifest["plan"]["status"] == "generated"
+                else "unsupported_build_response"
+            ),
+            schema=build_response_schema(manifest),
+        )
+        mismatch = manifest_mismatch(response, manifest)
+        if mismatch is not None:
+            raise CandidateRejected(
+                response,
+                Diagnostic("shape", "MANIFEST_DRIFT", "manifest", mismatch),
+            )
+        return response
 
     def choose_action(self, observation: JsonObject) -> JsonObject:
         return self._json_response(ACTOR_INSTRUCTIONS, json.dumps(observation, sort_keys=True))
+
+    def _structured_response(
+        self,
+        instructions: str,
+        input_text: str,
+        *,
+        name: str,
+        schema: JsonObject,
+    ) -> JsonObject:
+        response = self._client.responses.create(
+            model=self._model,
+            instructions=instructions,
+            input=input_text,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": name,
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+            store=False,
+        )
+        return self._decoded_object(response.output_text)
 
     def _json_response(self, instructions: str, input_text: str) -> JsonObject:
         response = self._client.responses.create(
@@ -112,7 +152,11 @@ class OpenAIProvider:
             text={"format": {"type": "json_object"}},
             store=False,
         )
-        value = json.loads(response.output_text)
+        return self._decoded_object(response.output_text)
+
+    @staticmethod
+    def _decoded_object(output_text: str) -> JsonObject:
+        value = json.loads(output_text)
         if not isinstance(value, dict):
             raise ValueError("provider response must be a JSON object")
         return value

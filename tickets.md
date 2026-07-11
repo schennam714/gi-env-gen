@@ -90,6 +90,25 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets that 
 
 
 
+## Enforce builder output with strict structured outputs
+
+**What to build:** Preserve builder-chosen dynamic names while requiring provider-backed
+builder responses to conform to strict JSON schemas before deterministic semantic
+validation and replay.
+
+**Blocked by:** Generate bounded repeated movement.
+
+- [x] Use a strict manifest to declare builder-chosen dynamic keys for each logical attempt.
+- [x] Generate strict schemas for complete generated and unsupported build responses.
+- [x] Reject missing, extra, wrongly typed, and unknown operation forms offline.
+- [x] Keep reference, initial-state, interpretation-freezing, and replay checks in Python.
+- [x] Keep the proposed solution and builder authoring context hidden from acting.
+- [x] Keep operation semantics in instructions without duplicating the full schema.
+- [x] Exercise every currently supported operation form through the shared schema boundary.
+- [x] Measure live first-attempt, repaired, unsupported, exhausted, and provider-failure rates across supported vocabulary slices.
+
+
+
 ## Generate autonomous threats and exact failures
 
 **What to build:** From a moving-threat prompt, the builder authors automatic pursuit and a code-level failure predicate, while acting mistakes and generated-program failures remain distinguishable.

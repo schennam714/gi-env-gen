@@ -5,10 +5,7 @@ from typing import Any, Mapping, Protocol
 
 from .model import FrozenEnvironment, JsonObject, freeze_environment
 from .runtime import EffectLimitExceeded, EnvironmentProgramError, Transition, _condition, start, step
-
-
-class BuilderProvider(Protocol):
-    def generate_build(self, request: BuildRequest) -> JsonObject: ...
+from .structured_output import CONDITION_OPERATIONS, EFFECT_OPERATIONS
 
 
 @dataclass(frozen=True)
@@ -17,6 +14,17 @@ class Diagnostic:
     code: str
     path: str
     message: str
+
+
+class CandidateRejected(Exception):
+    def __init__(self, response: JsonObject, diagnostic: Diagnostic) -> None:
+        super().__init__(diagnostic.message)
+        self.response = response
+        self.diagnostic = diagnostic
+
+
+class BuilderProvider(Protocol):
+    def generate_build(self, request: BuildRequest) -> JsonObject: ...
 
 
 @dataclass(frozen=True)
@@ -79,6 +87,13 @@ def build(prompt: str, provider: BuilderProvider) -> BuildResult:
         request = BuildRequest(prompt, frozen_interpretation, previous_response, diagnostics)
         try:
             response = provider.generate_build(request)
+        except CandidateRejected as error:
+            diagnostics = (error.diagnostic,)
+            attempts.append(BuildAttempt(error.response, diagnostics))
+            previous_response = error.response
+            if frozen_interpretation is None and _generated_shape_is_valid(error.response):
+                frozen_interpretation = tuple(error.response["interpretation"])
+            continue
         except Exception as error:
             return ProviderFailed(str(error), tuple(attempts))
         result = _validate_response(response, frozen_interpretation)
@@ -282,15 +297,7 @@ def _validate_condition(
     parameters: Mapping[str, Any],
     path: str,
 ) -> Diagnostic | None:
-    if not isinstance(condition, dict) or condition.get("operation") not in {
-        "all",
-        "any",
-        "not",
-        "at",
-        "adjacent",
-        "can_move",
-        "property_equals",
-    }:
+    if not isinstance(condition, dict) or condition.get("operation") not in CONDITION_OPERATIONS:
         return Diagnostic("shape", "INVALID_CONDITION", path, "Unsupported condition operation.")
     operation = condition["operation"]
     if operation in {"all", "any"}:
@@ -373,13 +380,7 @@ def _validate_effect(
     *,
     allow_repeat: bool = True,
 ) -> Diagnostic | None:
-    if not isinstance(effect, dict) or effect.get("operation") not in {
-        "move",
-        "set_position",
-        "set_property",
-        "emit",
-        "repeat",
-    }:
+    if not isinstance(effect, dict) or effect.get("operation") not in EFFECT_OPERATIONS:
         return Diagnostic("shape", "INVALID_EFFECT", path, "Unsupported effect operation.")
     operation = effect["operation"]
     if operation == "repeat":

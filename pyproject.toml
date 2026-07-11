@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["openai>=1.30"]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.10", "pytest>=8"]
+dev = ["jsonschema>=4.22", "mypy>=1.10", "pytest>=8"]
 
 [project.scripts]
 gi-env-gen = "gi_env_gen.cli:main"
