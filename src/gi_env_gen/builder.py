@@ -229,8 +229,16 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
     ids: list[str] = []
     entity_properties: dict[str, set[str]] = {}
     for token, declaration in legend.items():
-        if not isinstance(declaration, dict) or not isinstance(declaration.get("id"), str):
+        if not isinstance(declaration, dict):
             return Diagnostic("shape", "INVALID_ENTITY", f"environment.legend.{token}", "Invalid entity declaration.")
+        entity_id = declaration.get("id")
+        if not isinstance(entity_id, str) or not entity_id or entity_id in ids:
+            return Diagnostic(
+                "shape",
+                "INVALID_ENTITY_ID",
+                f"environment.legend.{token}.id",
+                "Entity IDs must be unique non-empty strings.",
+            )
         props = declaration.get("properties")
         if (
             not isinstance(props, dict)
@@ -239,12 +247,12 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
             or any(not isinstance(name, str) or not _scalar(value) for name, value in props.items())
         ):
             return Diagnostic("shape", "INVALID_ENTITY_PROPERTIES", f"environment.legend.{token}.properties", "symbol, solid, and scalar property values are required.")
-        ids.append(declaration["id"])
-        entity_properties[declaration["id"]] = set(props)
-    if len(ids) != len(set(ids)) or program["actor"] not in ids:
-        return Diagnostic("references", "INVALID_ACTOR_OR_ENTITY_IDS", "environment.actor", "Actor must name a unique entity.")
+        ids.append(entity_id)
+        entity_properties[entity_id] = set(props)
+    if program["actor"] not in ids:
+        return Diagnostic("references", "INVALID_ACTOR", "environment.actor", "Actor must name a declared entity.")
     if not isinstance(program["values"], dict) or any(
-        not isinstance(name, str) or not _scalar(value)
+        not isinstance(name, str) or not name or not _scalar(value)
         for name, value in program["values"].items()
     ):
         return Diagnostic("shape", "INVALID_VALUES", "environment.values", "Values must be named scalar values.")
@@ -256,11 +264,16 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         path = f"environment.actions[{index}]"
         if not isinstance(action, dict) or set(action) != {"name", "parameters", "allowed_when", "effects"}:
             return Diagnostic("shape", "INVALID_ACTION", path, "Invalid action shape.")
-        if not isinstance(action["name"], str) or action["name"] in action_names:
-            return Diagnostic("shape", "INVALID_ACTION_NAME", path, "Action names must be unique strings.")
+        if not isinstance(action["name"], str) or not action["name"] or action["name"] in action_names:
+            return Diagnostic("shape", "INVALID_ACTION_NAME", path + ".name", "Action names must be unique non-empty strings.")
         action_names.add(action["name"])
         parameters = action["parameters"]
-        if not isinstance(parameters, dict) or any(kind not in {"direction", "entity", "number", "string"} for kind in parameters.values()):
+        if not isinstance(parameters, dict) or any(
+            not isinstance(name, str)
+            or not name
+            or kind not in {"direction", "entity", "number", "string"}
+            for name, kind in parameters.items()
+        ):
             return Diagnostic("shape", "INVALID_PARAMETERS", path + ".parameters", "Actions accept direction, entity, number, and string parameters.")
         if not isinstance(action["allowed_when"], list) or not isinstance(action["effects"], list):
             return Diagnostic("shape", "INVALID_ACTION_RULES", path, "Conditions and effects must be arrays.")
@@ -280,8 +293,8 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         path = f"environment.after_action[{index}]"
         if not isinstance(rule, dict) or set(rule) != {"id", "when", "effects"}:
             return Diagnostic("shape", "INVALID_AFTER_ACTION", path, "Invalid after-action rule shape.")
-        if not isinstance(rule["id"], str) or rule["id"] in after_action_ids:
-            return Diagnostic("shape", "INVALID_AFTER_ACTION_ID", path + ".id", "After-action IDs must be unique strings.")
+        if not isinstance(rule["id"], str) or not rule["id"] or rule["id"] in after_action_ids:
+            return Diagnostic("shape", "INVALID_AFTER_ACTION_ID", path + ".id", "After-action IDs must be unique non-empty strings.")
         after_action_ids.add(rule["id"])
         if not isinstance(rule["when"], list) or not isinstance(rule["effects"], list):
             return Diagnostic("shape", "INVALID_AFTER_ACTION", path, "Conditions and effects must be arrays.")
@@ -300,8 +313,8 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
         path = f"environment.objectives[{index}]"
         if not isinstance(objective, dict) or set(objective) != {"id", "description", "satisfied_when"}:
             return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Invalid objective shape.")
-        if not isinstance(objective["id"], str) or objective["id"] in objective_ids or not isinstance(objective["description"], str):
-            return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Objective IDs must be unique and descriptions textual.")
+        if not isinstance(objective["id"], str) or not objective["id"] or objective["id"] in objective_ids or not isinstance(objective["description"], str):
+            return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Objective IDs must be unique non-empty strings and descriptions textual.")
         objective_ids.add(objective["id"])
         error = _validate_condition(objective["satisfied_when"], ids, entity_properties, values, {}, path + ".satisfied_when")
         if error:
@@ -315,10 +328,11 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
             not isinstance(failure, dict)
             or set(failure) != {"id", "description", "when"}
             or not isinstance(failure["id"], str)
+            or not failure["id"]
             or not isinstance(failure["description"], str)
             or failure["id"] in failure_ids
         ):
-            return Diagnostic("shape", "INVALID_FAILURE", path, "Failure IDs must be unique and descriptions textual.")
+            return Diagnostic("shape", "INVALID_FAILURE", path, "Failure IDs must be unique non-empty strings and descriptions textual.")
         failure_ids.add(failure["id"])
         error = _validate_condition(failure["when"], ids, entity_properties, values, {}, path + ".when")
         if error:
@@ -371,6 +385,8 @@ def _validate_condition(
         expected = {"operation", "entity", "direction"}
     elif operation == "property_equals":
         expected = {"operation", "entity", "property", "value"}
+    elif operation == "event_occurred":
+        expected = {"operation", "event", "scope"} | ({"target"} if "target" in condition else set())
     else:
         expected = {"operation", "value", "comparator", "expected"}
     if set(condition) != expected:
@@ -384,6 +400,14 @@ def _validate_condition(
         return None
     if operation == "can_move":
         return _validate_entity_and_direction(condition, ids, parameters, path)
+    if operation == "event_occurred":
+        if not isinstance(condition["event"], str) or not condition["event"]:
+            return Diagnostic("shape", "INVALID_EVENT", path + ".event", "Event name must be a non-empty string.")
+        if condition["scope"] not in {"current_step", "episode"}:
+            return Diagnostic("shape", "INVALID_EVENT_SCOPE", path + ".scope", "Event scope must be current_step or episode.")
+        if "target" in condition and not _entity_reference(condition["target"], ids, parameters):
+            return Diagnostic("references", "UNKNOWN_ENTITY", path + ".target", "Unknown entity reference.")
+        return None
     if operation == "value_compare":
         value_id = condition["value"]
         if not isinstance(value_id, str) or value_id not in values:
@@ -557,8 +581,10 @@ def _validate_effect(
             return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".new_value", "set_value must preserve the declared value type.")
         return None
     expected = {"operation", "event"} | ({"target"} if "target" in effect else set())
-    if set(effect) != expected or not isinstance(effect["event"], str):
+    if set(effect) != expected:
         return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid emit effect shape.")
+    if not isinstance(effect["event"], str) or not effect["event"]:
+        return Diagnostic("shape", "INVALID_EFFECT", path + ".event", "Emitted event name must be a non-empty string.")
     if "target" in effect and not _entity_reference(effect["target"], ids, parameters):
         return Diagnostic("references", "UNKNOWN_ENTITY", path + ".target", "Unknown entity reference.")
     return None

@@ -37,9 +37,11 @@ Map rows are rectangular ASCII; # is wall and . is floor. Every other source tok
 occurs once. Entity symbol is one printable character and solid is boolean. Additional
 builder-chosen properties and global values may be boolean, number, string, or null.
 
-The conditions are at, adjacent, can_move, property_equals, value_compare, and recursive
-all, any, and not composition. value_compare supports eq, ne, lt, lte, gt, and gte on
-declared numeric values. The effects are move, move_toward, set_position, set_property,
+The conditions are at, adjacent, can_move, property_equals, value_compare,
+event_occurred, and recursive all, any, and not composition. value_compare supports
+eq, ne, lt, lte, gt, and gte on declared numeric values. event_occurred checks an
+exact emitted event and optional target at current_step or episode scope. The effects
+are move, move_toward, set_position, set_property,
 set_value, change_value, emit, and repeat. set_value replaces a declared value with a
 compatible scalar; change_value adds a number to a declared numeric value. move_toward takes one traversable shortest-path step toward its
 target, uses UP, RIGHT, DOWN, LEFT tie breaking, and is a no-op when no path exists.

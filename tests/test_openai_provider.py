@@ -127,6 +127,16 @@ def test_builder_observes_a_failed_physical_structured_call() -> None:
 
 
 def test_every_supported_fixture_satisfies_its_generated_strict_schema() -> None:
+    event_response = reach_build_response()
+    event_response["environment"]["actions"][0]["effects"].append(
+        {"operation": "emit", "event": "arrived", "target": "beacon"}
+    )
+    event_response["environment"]["objectives"][0]["satisfied_when"] = {
+        "operation": "event_occurred",
+        "event": "arrived",
+        "target": "beacon",
+        "scope": "current_step",
+    }
     responses = (
         reach_build_response(),
         push_trigger_build_response(),
@@ -134,6 +144,7 @@ def test_every_supported_fixture_satisfies_its_generated_strict_schema() -> None
         bounded_repeat_build_response(),
         pursuit_build_response(),
         timed_build_response(),
+        event_response,
     )
     observed_conditions: set[str] = set()
     observed_effects: set[str] = set()

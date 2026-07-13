@@ -6,7 +6,17 @@ from .model import JsonObject
 
 SCALAR_SCHEMA: JsonObject = {"type": ["boolean", "number", "string", "null"]}
 CONDITION_OPERATIONS = frozenset(
-    {"all", "any", "not", "at", "adjacent", "can_move", "property_equals", "value_compare"}
+    {
+        "all",
+        "any",
+        "not",
+        "at",
+        "adjacent",
+        "can_move",
+        "property_equals",
+        "value_compare",
+        "event_occurred",
+    }
 )
 NON_REPEAT_EFFECT_OPERATIONS = frozenset(
     {"move", "move_toward", "set_position", "set_property", "set_value", "change_value", "emit"}
@@ -451,6 +461,21 @@ def _condition_schema() -> JsonObject:
                     "value": {"type": "string", "minLength": 1},
                     "comparator": {"type": "string", "enum": ["eq", "ne", "lt", "lte", "gt", "gte"]},
                     "expected": {"anyOf": [{"type": "number"}, {"type": "string", "pattern": r"^\$.+"}]},
+                }
+            ),
+            _strict_object_schema(
+                {
+                    "operation": _string_const("event_occurred"),
+                    "event": {"type": "string", "minLength": 1},
+                    "scope": {"type": "string", "enum": ["current_step", "episode"]},
+                }
+            ),
+            _strict_object_schema(
+                {
+                    "operation": _string_const("event_occurred"),
+                    "event": {"type": "string", "minLength": 1},
+                    "target": entity_ref,
+                    "scope": {"type": "string", "enum": ["current_step", "episode"]},
                 }
             ),
         ]

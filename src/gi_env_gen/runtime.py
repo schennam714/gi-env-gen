@@ -260,6 +260,18 @@ def _condition(
         entity = _resolve(condition["entity"], arguments)
         value = _resolve(condition["value"], arguments) if isinstance(condition["value"], str) else condition["value"]
         return condition["property"] in state.properties[entity] and state.properties[entity][condition["property"]] == value
+    if operation == "event_occurred":
+        events = (
+            state.current_step_events
+            if condition["scope"] == "current_step"
+            else state.episode_events
+        )
+        target = _resolve(condition["target"], arguments) if "target" in condition else None
+        return any(
+            record.event == condition["event"]
+            and ("target" not in condition or record.target == target)
+            for record in events
+        )
     if operation == "value_compare":
         actual = state.values[condition["value"]]
         expected = _resolve(condition["expected"], arguments) if isinstance(condition["expected"], str) else condition["expected"]
