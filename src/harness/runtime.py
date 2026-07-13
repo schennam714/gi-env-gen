@@ -21,6 +21,10 @@ class EnvironmentProgramError(ValueError):
     pass
 
 
+class UnusableActorOutputError(ValueError):
+    """The actor response does not invoke a generated action with valid arguments."""
+
+
 class EffectLimitExceeded(EnvironmentProgramError):
     pass
 
@@ -195,24 +199,24 @@ def step(
 
 def _matching_action(program: JsonObject, invocation: Mapping[str, Any]) -> JsonObject:
     if set(invocation) != {"action", "arguments"} or not isinstance(invocation["arguments"], dict):
-        raise EnvironmentProgramError("action invocation must contain action and arguments")
+        raise UnusableActorOutputError("action invocation must contain action and arguments")
     matches = [action for action in program["actions"] if action["name"] == invocation["action"]]
     if not matches:
-        raise EnvironmentProgramError(f"unknown generated action: {invocation['action']!r}")
+        raise UnusableActorOutputError(f"unknown generated action: {invocation['action']!r}")
     action = matches[0]
     arguments = invocation["arguments"]
     if set(arguments) != set(action["parameters"]):
-        raise EnvironmentProgramError("action arguments do not match generated parameters")
+        raise UnusableActorOutputError("action arguments do not match generated parameters")
     for name, kind in action["parameters"].items():
         value = arguments[name]
         if kind == "direction" and value not in DIRECTIONS:
-            raise EnvironmentProgramError(f"argument {name!r} must be a direction")
+            raise UnusableActorOutputError(f"argument {name!r} must be a direction")
         if kind == "entity" and (not isinstance(value, str) or value not in _entity_ids(program)):
-            raise EnvironmentProgramError(f"argument {name!r} must name a declared entity")
+            raise UnusableActorOutputError(f"argument {name!r} must name a declared entity")
         if kind == "number" and type(value) not in {int, float}:
-            raise EnvironmentProgramError(f"argument {name!r} must be a number")
+            raise UnusableActorOutputError(f"argument {name!r} must be a number")
         if kind == "string" and not isinstance(value, str):
-            raise EnvironmentProgramError(f"argument {name!r} must be a string")
+            raise UnusableActorOutputError(f"argument {name!r} must be a string")
     return cast(JsonObject, action)
 
 

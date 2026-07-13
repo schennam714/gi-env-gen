@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .acting import UnusableActorResponse
 from .builder import BuildRequest, CandidateRejected, Diagnostic
 from .model import JsonObject
 from .structured_output import (
@@ -73,7 +74,8 @@ The JSON observation is complete. Choose exactly one available generated action 
 return JSON shaped {"action": <name>, "arguments": {...}}. Copy the action name and
 parameter names exactly. A direction argument must be exactly one of "UP", "RIGHT",
 "DOWN", or "LEFT" in uppercase. An entity argument must copy a current declared entity
-ID exactly. Never claim or alter state.
+ID exactly. If formatting_recovery is present, correct the prior response using its
+deterministic error without assuming the world advanced. Never claim or alter state.
 """
 
 
@@ -142,7 +144,20 @@ class OpenAIProvider:
         return response
 
     def choose_action(self, observation: JsonObject) -> JsonObject:
-        return self._json_response(ACTOR_INSTRUCTIONS, json.dumps(observation, sort_keys=True))
+        response = self._client.responses.create(
+            model=self._model,
+            instructions=ACTOR_INSTRUCTIONS,
+            input=(
+                "Return one JSON object for this request:\n"
+                + json.dumps(observation, sort_keys=True)
+            ),
+            text={"format": {"type": "json_object"}},
+            store=False,
+        )
+        try:
+            return self._decoded_object(response.output_text)
+        except (json.JSONDecodeError, ValueError) as error:
+            raise UnusableActorResponse(response.output_text, str(error)) from error
 
     def _structured_response(
         self,
@@ -188,16 +203,6 @@ class OpenAIProvider:
                 )
             )
         return output
-
-    def _json_response(self, instructions: str, input_text: str) -> JsonObject:
-        response = self._client.responses.create(
-            model=self._model,
-            instructions=instructions,
-            input="Return one JSON object for this request:\n" + input_text,
-            text={"format": {"type": "json_object"}},
-            store=False,
-        )
-        return self._decoded_object(response.output_text)
 
     @staticmethod
     def _decoded_object(output_text: str) -> JsonObject:
