@@ -24,6 +24,11 @@ CASES = {
         "Create a small ice-like corridor where one generated action repeatedly moves the "
         "explorer while movement remains possible and stops at the goal."
     ),
+    "timed_values": (
+        "Create a small corridor where an explorer must reach a beacon before a generated "
+        "numeric turn budget reaches zero. Define the budget, automatic decrement, numeric "
+        "failure comparison, movement action, objective, and successful solution in the program."
+    ),
 }
 
 

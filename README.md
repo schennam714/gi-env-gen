@@ -69,6 +69,12 @@ diagnostics, the frozen environment hash, and private proposed-solution replay:
 uv run python scripts/smoke_builder_matrix.py --case bounded_repeat --trace
 ```
 
+To verify generated numeric state and failure rules specifically:
+
+```sh
+uv run python scripts/smoke_builder_matrix.py --case timed_values --trace
+```
+
 Trace mode exits nonzero if any captured response fails its exact local schema check.
 The trace is local validation evidence: its proposed solution remains under the
 `private_validation_evidence` field and is never sent to the acting LLM. Compact mode
@@ -78,3 +84,10 @@ The `gpt-5.6` smoke run on 2026-07-11 accepted reach, push/trigger, and bounded-
 cases on their first logical attempt and accepted possession/prerequisite after one
 repair: first-attempt `3/4` (`0.75`), repaired `1/4` (`0.25`), unsupported `0`,
 exhausted `0`, and provider failure `0`.
+
+The `gpt-5.6` timed-values smoke run on 2026-07-13 was accepted on its first logical
+attempt with zero strict-schema errors. Its generated solution replay reached success
+in four steps with one turn remaining (`e4523984c5699e1790b6eed72ea4a7b73d9802df18444c92373f0bdc2712ebdf`).
+A separate full CLI run generated and froze a fresh timed environment
+(`87be12f13f78ab25d42a706efe13b29b76c1db8d53d56312a2817fd9da313955`), then the
+independent acting LLM reached generated success in four calls.

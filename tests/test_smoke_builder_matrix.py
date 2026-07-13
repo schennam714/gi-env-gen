@@ -111,6 +111,10 @@ def test_compact_report_omits_trace_evidence(monkeypatch: Any, capsys: Any) -> N
     ]
 
 
+def test_live_matrix_exposes_the_timed_values_slice() -> None:
+    assert "numeric turn budget" in smoke_builder_matrix.CASES["timed_values"]
+
+
 class InvalidTraceProviderFake(TraceProviderFake):
     def manifest_output(self, manifest: dict[str, Any]) -> dict[str, Any]:
         return {**manifest, "unexpected": True}
