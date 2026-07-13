@@ -259,15 +259,27 @@ def test_mixed_generated_program_replays_and_independent_actor_succeeds() -> Non
 
     assert result.status == "success"
     assert result.transitions[-1].state.positions["token"] is None
+    assert result.transitions[-1].state.positions["wanderer"] == (6, 1)
     assert result.transitions[-1].state.properties["barrier"]["sealed"] is False
     assert result.transitions[-1].state.values["charge"] == 1
-    assert [action["name"] for action in actor.observations[-1]["available_actions"]] == [
+    assert len(result.transitions[-1].direct_effect_states) == 5
+    assert [event.event for event in result.transitions[-1].state.episode_events] == [
+        "claimed",
+        "changed",
+    ]
+    expected_action_names = [
         "ADVANCE",
         "CLAIM",
         "CHANGE",
         "TRAVERSE",
     ]
+    assert all(
+        [action["name"] for action in observation["available_actions"]]
+        == expected_action_names
+        for observation in actor.observations
+    )
     assert "solution" not in repr(actor.observations)
+    assert "attempts" not in repr(actor.observations)
 
 
 def test_same_validation_passed_environment_can_end_in_generated_acting_failure() -> None:
@@ -292,7 +304,7 @@ def test_same_validation_passed_environment_can_end_in_generated_acting_failure(
     assert result.transitions[-1].state.values["charge"] == 0
 
 
-def test_complete_program_rejects_an_empty_action_id_before_replay() -> None:
+def test_complete_program_rejects_an_empty_action_name_before_replay() -> None:
     response = mixed_build_response()
     response["environment"]["actions"][0]["name"] = ""
     response["solution"][1]["action"] = ""
@@ -312,7 +324,7 @@ def test_complete_program_rejects_an_empty_action_id_before_replay() -> None:
     [
         ("entities", "INVALID_ENTITY_ID"),
         ("actions", "INVALID_ACTION_NAME"),
-        ("triggers", "INVALID_AFTER_ACTION_ID"),
+        ("after_action_rules", "INVALID_AFTER_ACTION_ID"),
         ("objectives", "INVALID_OBJECTIVE"),
         ("failures", "INVALID_FAILURE"),
     ],
@@ -327,7 +339,7 @@ def test_complete_program_rejects_duplicate_ids_before_replay(
         environment["legend"]["T"]["id"] = environment["legend"]["A"]["id"]
     elif namespace == "actions":
         environment["actions"][1]["name"] = environment["actions"][0]["name"]
-    elif namespace == "triggers":
+    elif namespace == "after_action_rules":
         environment["after_action"][1]["id"] = environment["after_action"][0]["id"]
     elif namespace == "objectives":
         environment["objectives"][1]["id"] = environment["objectives"][0]["id"]
@@ -349,7 +361,7 @@ def test_complete_program_rejects_duplicate_ids_before_replay(
         ("entities", "INVALID_ENTITY_ID"),
         ("values", "INVALID_VALUES"),
         ("parameters", "INVALID_PARAMETERS"),
-        ("triggers", "INVALID_AFTER_ACTION_ID"),
+        ("after_action_rules", "INVALID_AFTER_ACTION_ID"),
         ("objectives", "INVALID_OBJECTIVE"),
         ("failures", "INVALID_FAILURE"),
     ],
@@ -371,7 +383,7 @@ def test_complete_program_rejects_empty_ids_before_replay(
         environment["actions"][0]["allowed_when"][0]["direction"] = "$"
         environment["actions"][0]["effects"][0]["direction"] = "$"
         response["solution"][1]["arguments"] = {"": "RIGHT"}
-    elif namespace == "triggers":
+    elif namespace == "after_action_rules":
         environment["after_action"][0]["id"] = ""
     elif namespace == "objectives":
         environment["objectives"][0]["id"] = ""
@@ -392,6 +404,7 @@ def test_complete_program_rejects_empty_ids_before_replay(
     [
         ("empty_event", "INVALID_EVENT", "environment.objectives[0].satisfied_when.event"),
         ("invalid_scope", "INVALID_EVENT_SCOPE", "environment.objectives[0].satisfied_when.scope"),
+        ("wrong_scope_type", "INVALID_EVENT_SCOPE", "environment.objectives[0].satisfied_when.scope"),
         ("unknown_target", "UNKNOWN_ENTITY", "environment.objectives[0].satisfied_when.target"),
         ("extra_field", "INVALID_CONDITION", "environment.objectives[0].satisfied_when"),
         ("empty_emit", "INVALID_EFFECT", "environment.actions[1].effects[2].event"),
@@ -408,6 +421,8 @@ def test_event_operations_are_fully_validated_before_replay(
         condition["event"] = ""
     elif mutation == "invalid_scope":
         condition["scope"] = "turn"
+    elif mutation == "wrong_scope_type":
+        condition["scope"] = []
     elif mutation == "unknown_target":
         condition["target"] = "$target"
     elif mutation == "extra_field":

@@ -403,7 +403,7 @@ def _validate_condition(
     if operation == "event_occurred":
         if not isinstance(condition["event"], str) or not condition["event"]:
             return Diagnostic("shape", "INVALID_EVENT", path + ".event", "Event name must be a non-empty string.")
-        if condition["scope"] not in {"current_step", "episode"}:
+        if not isinstance(condition["scope"], str) or condition["scope"] not in {"current_step", "episode"}:
             return Diagnostic("shape", "INVALID_EVENT_SCOPE", path + ".scope", "Event scope must be current_step or episode.")
         if "target" in condition and not _entity_reference(condition["target"], ids, parameters):
             return Diagnostic("references", "UNKNOWN_ENTITY", path + ".target", "Unknown entity reference.")
