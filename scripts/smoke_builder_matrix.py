@@ -7,8 +7,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from gi_env_gen.builder import AcceptedBuild, GenerationFailed, ProviderFailed, UnsupportedBuild, build
-from gi_env_gen.openai_provider import DEFAULT_MODEL, OpenAIProvider, StructuredResponseTrace
+from harness.builder import AcceptedBuild, GenerationFailed, ProviderFailed, UnsupportedBuild, build
+from harness.openai_provider import DEFAULT_MODEL, OpenAIProvider, StructuredResponseTrace
 
 CASES = {
     "reach": "Create a small corridor where an explorer must reach a beacon.",

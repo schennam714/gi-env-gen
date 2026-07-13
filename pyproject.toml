@@ -13,7 +13,7 @@ dependencies = ["jsonschema>=4.22", "openai>=1.30"]
 dev = ["mypy>=1.10", "pytest>=8", "types-jsonschema>=4.22"]
 
 [project.scripts]
-gi-env-gen = "gi_env_gen.cli:main"
+gi-env-gen = "harness.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -25,4 +25,4 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-packages = ["gi_env_gen"]
+packages = ["harness"]

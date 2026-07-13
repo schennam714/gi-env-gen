@@ -1,6 +1,27 @@
+.env
+.env.*
+!.env.example
+
+.venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .mypy_cache/
 .pytest_cache/
 
+tests/
+README.md
+tickets.md
+BACKLOG.md
+CONTEXT.md
+
+AGENTS.md
+.agents/
+PRD.md
+prompt.md
+skills-lock.json
+\[EXTERNAL\] General Intuition Research Tech Challenge.pdf
+
+docs/adr/
+docs/agents/
+docs/environment-program.md
