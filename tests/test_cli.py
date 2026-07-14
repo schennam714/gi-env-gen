@@ -1,4 +1,5 @@
 import json
+import os
 from copy import deepcopy
 from io import StringIO
 from pathlib import Path
@@ -287,9 +288,11 @@ def test_terminal_dashboard_uses_normal_buffer_and_leaves_final_frame(
 
 
 def test_reviewer_cli_fails_clearly_before_generation_when_credential_is_missing(
+    tmp_path: Path,
     monkeypatch: Any,
     capsys: Any,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with pytest.raises(SystemExit) as exit_info:
@@ -297,6 +300,45 @@ def test_reviewer_cli_fails_clearly_before_generation_when_credential_is_missing
 
     assert exit_info.value.code == 2
     assert "OPENAI_API_KEY is required for live generation and acting" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("exported_key", "expected_key"),
+    [(None, "dotenv-test-key"), ("exported-test-key", "exported-test-key")],
+)
+def test_reviewer_cli_loads_dotenv_without_overriding_exported_api_key(
+    tmp_path: Path,
+    monkeypatch: Any,
+    exported_key: str | None,
+    expected_key: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if exported_key is None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", exported_key)
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=dotenv-test-key\n", encoding="utf-8")
+    provider = ReviewerProviderFake()
+    observed_keys: list[str | None] = []
+
+    def provider_factory(**_: Any) -> ReviewerProviderFake:
+        observed_keys.append(os.environ.get("OPENAI_API_KEY"))
+        return provider
+
+    monkeypatch.setattr(cli, "OpenAIProvider", provider_factory)
+
+    exit_code = cli.main(
+        [
+            "Reach the beacon",
+            "--max-steps",
+            "5",
+            "--evidence-dir",
+            "evidence",
+        ]
+    )
+
+    assert exit_code == 0
+    assert observed_keys == [expected_key, expected_key]
 
 
 def test_reviewer_evidence_keeps_unusable_actor_attempts_and_unchanged_state(

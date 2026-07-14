@@ -18,24 +18,33 @@ from .structured_output import (
 
 DEFAULT_MODEL = "gpt-5.6"
 
-MANIFEST_INSTRUCTIONS = """You are planning the names for a deterministic 2D rule environment.
+GENERATED_PROGRAM_GUIDANCE = """Do not declare legend entities for static # walls or . floors.
+Every declared legend token must occur exactly once in the source map, even when its rendered symbol differs from
+its source token. Represent numeric counters, budgets, and timers as global numeric values.
+Increment or decrement them with one change_value effect per applicable action or automatic rule and compare them
+with value_compare. Do not enumerate one automatic rule per numeric state."""
+
+MANIFEST_INSTRUCTIONS = f"""You are planning the names for a deterministic 2D rule environment.
 If the request is unsupported, provide its interpretation and reason. Otherwise, list
 every generated source-map token and entity ID, every property name on each entity,
 and every generated action name and parameter name/type, plus every global value name. Every entity must list symbol
 and solid. Entity tokens are one printable character and cannot be # or .. This manifest
+must not duplicate reserved terrain as entities.
+{GENERATED_PROGRAM_GUIDANCE}
 fixes the dynamic keys for the complete response but does not
 replace the complete environment program or proposed solution returned next.
 """
 
-BUILDER_INSTRUCTIONS = """You are the builder for a deterministic 2D rule environment.
+BUILDER_INSTRUCTIONS = f"""You are the builder for a deterministic 2D rule environment.
 Return the complete response using exactly the names fixed by the supplied manifest.
 For a generated response, author the map, entity property values, actions, automatic
 rules, objectives, and proposed solution. For an unsupported response, explain why the
 request cannot be represented exactly. The complete response's interpretation is the
 authoritative wording used by validation and any later repair.
 
-Map rows are rectangular ASCII; # is wall and . is floor. Every other source token
-occurs once. Entity symbol is one printable character and solid is boolean. Additional
+Map rows are rectangular ASCII; # is wall and . is floor. Every other source token occurs once.
+{GENERATED_PROGRAM_GUIDANCE}
+Entity symbol is one printable character and solid is boolean. Additional
 builder-chosen properties and global values may be boolean, number, string, or null.
 
 The conditions are at, adjacent, can_move, property_equals, value_compare,

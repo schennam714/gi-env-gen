@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from dotenv import load_dotenv
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -48,6 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Directory for this run's five machine-readable evidence artifacts",
     )
     args = parser.parse_args(argv)
+    load_dotenv(Path.cwd() / ".env", override=False)
     models = RunModels(builder=DEFAULT_MODEL, actor=args.actor)
     evidence_dir = args.evidence_dir or _default_evidence_directory()
     try:

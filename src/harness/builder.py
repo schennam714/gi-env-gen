@@ -225,8 +225,20 @@ def _validate_environment_program(program: JsonObject) -> Diagnostic | None:
     source = "".join(rows)
     if any(token not in "#." and token not in legend for token in source):
         return Diagnostic("references", "UNKNOWN_MAP_TOKEN", "environment.map", "Every entity token needs a legend entry.")
-    if any(source.count(token) != 1 for token in legend):
-        return Diagnostic("initial_state", "LEGEND_TOKEN_COUNT", "environment.legend", "Each legend token must occur once.")
+    for token, declaration in legend.items():
+        token_count = source.count(token)
+        if token_count != 1:
+            entity_id = declaration.get("id") if isinstance(declaration, dict) else None
+            entity_label = repr(entity_id) if isinstance(entity_id, str) else "<invalid>"
+            return Diagnostic(
+                "initial_state",
+                "LEGEND_TOKEN_COUNT",
+                f"environment.legend.{token}",
+                (
+                    f"Legend token {token!r} for entity {entity_label} occurs "
+                    f"{token_count} times; expected exactly once."
+                ),
+            )
     ids: list[str] = []
     entity_properties: dict[str, set[str]] = {}
     for token, declaration in legend.items():
