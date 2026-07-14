@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeAlias
 
 from .builder import AcceptedBuild
 from .model import JsonObject
@@ -18,6 +18,40 @@ from .runtime import (
 
 class ActingProvider(Protocol):
     def choose_action(self, observation: JsonObject) -> JsonObject: ...
+
+
+ActingStatus: TypeAlias = Literal[
+    "success",
+    "generated_failure",
+    "step_limit",
+    "unusable_actor_output",
+    "provider_failure",
+    "invalid_generated_program",
+]
+
+ActingUpdatePhase: TypeAlias = Literal[
+    "before_actor_request",
+    "after_response_attempt",
+    "response_error",
+    "after_transition",
+    "termination",
+]
+
+
+@dataclass(frozen=True)
+class ActingUpdate:
+    phase: ActingUpdatePhase
+    observation: JsonObject
+    state: RuntimeState
+    response: object | None = None
+    error: str | None = None
+    action: JsonObject | None = None
+    transition: Transition | None = None
+    status: ActingStatus | None = None
+
+
+class ActingUpdates(Protocol):
+    def acting_updated(self, update: ActingUpdate) -> None: ...
 
 
 class UnusableActorResponse(ValueError):
@@ -44,14 +78,7 @@ class ActingStep:
 
 @dataclass(frozen=True)
 class ActingResult:
-    status: Literal[
-        "success",
-        "generated_failure",
-        "step_limit",
-        "unusable_actor_output",
-        "provider_failure",
-        "invalid_generated_program",
-    ]
+    status: ActingStatus
     transitions: tuple[Transition, ...]
     steps: tuple[ActingStep, ...] = ()
     reason: str | None = None
@@ -63,6 +90,7 @@ def play(
     provider: ActingProvider,
     *,
     max_steps: int,
+    updates: ActingUpdates | None = None,
 ) -> ActingResult:
     if max_steps < 1:
         raise ValueError("max_steps must be positive")
@@ -89,6 +117,14 @@ def play(
                     "previous_response": copy.deepcopy(previous_attempt.response),
                     "error": previous_attempt.error,
                 }
+            _publish(
+                updates,
+                ActingUpdate(
+                    "before_actor_request",
+                    copy.deepcopy(attempt_observation),
+                    transition.state,
+                ),
+            )
             try:
                 invocation = provider.choose_action(copy.deepcopy(attempt_observation))
             except UnusableActorResponse as error:
@@ -98,6 +134,16 @@ def play(
                         copy.deepcopy(error.response),
                         str(error),
                     )
+                )
+                _publish(
+                    updates,
+                    ActingUpdate(
+                        "after_response_attempt",
+                        copy.deepcopy(attempt_observation),
+                        transition.state,
+                        copy.deepcopy(error.response),
+                        str(error),
+                    ),
                 )
                 continue
             except Exception as error:
@@ -113,12 +159,32 @@ def play(
                         transition.state,
                     )
                 )
-                return ActingResult(
+                result = ActingResult(
                     "provider_failure",
                     tuple(transitions),
                     tuple(acting_steps),
                     str(error),
                 )
+                _publish(
+                    updates,
+                    ActingUpdate(
+                        "after_response_attempt",
+                        copy.deepcopy(attempt_observation),
+                        transition.state,
+                        error=str(error),
+                    ),
+                )
+                _publish_termination(updates, transition, result)
+                return result
+            _publish(
+                updates,
+                ActingUpdate(
+                    "after_response_attempt",
+                    copy.deepcopy(attempt_observation),
+                    transition.state,
+                    copy.deepcopy(invocation),
+                ),
+            )
             try:
                 next_transition = step(accepted.environment, transition.state, invocation)
             except UnusableActorOutputError as error:
@@ -128,6 +194,16 @@ def play(
                         copy.deepcopy(invocation),
                         str(error),
                     )
+                )
+                _publish(
+                    updates,
+                    ActingUpdate(
+                        "response_error",
+                        copy.deepcopy(attempt_observation),
+                        transition.state,
+                        copy.deepcopy(invocation),
+                        str(error),
+                    ),
                 )
                 continue
             except EnvironmentProgramError as error:
@@ -147,12 +223,25 @@ def play(
                         transition.state,
                     )
                 )
-                return ActingResult(
+                result = ActingResult(
                     "invalid_generated_program",
                     tuple(transitions),
                     tuple(acting_steps),
                     str(error),
                 )
+                _publish(
+                    updates,
+                    ActingUpdate(
+                        "response_error",
+                        copy.deepcopy(attempt_observation),
+                        transition.state,
+                        copy.deepcopy(invocation),
+                        str(error),
+                        action=copy.deepcopy(invocation),
+                    ),
+                )
+                _publish_termination(updates, transition, result)
+                return result
             response_attempts.append(
                 ActorResponseAttempt(
                     attempt_observation,
@@ -170,12 +259,14 @@ def play(
                     transition.state,
                 )
             )
-            return ActingResult(
+            result = ActingResult(
                 "unusable_actor_output",
                 tuple(transitions),
                 tuple(acting_steps),
                 response_attempts[-1].error,
             )
+            _publish_termination(updates, transition, result)
+            return result
         transition = next_transition
         transitions.append(transition)
         acting_steps.append(
@@ -187,8 +278,18 @@ def play(
                 transition.state,
             )
         )
+        _publish(
+            updates,
+            ActingUpdate(
+                "after_transition",
+                copy.deepcopy(transition.observation),
+                transition.state,
+                action=copy.deepcopy(invocation),
+                transition=transition,
+            ),
+        )
         if transition.state.status != "running":
-            return ActingResult(
+            result = ActingResult(
                 (
                     "success"
                     if transition.state.status == "success"
@@ -197,4 +298,34 @@ def play(
                 tuple(transitions),
                 tuple(acting_steps),
             )
-    return ActingResult("step_limit", tuple(transitions), tuple(acting_steps))
+            _publish_termination(updates, transition, result)
+            return result
+    result = ActingResult("step_limit", tuple(transitions), tuple(acting_steps))
+    _publish_termination(updates, transition, result)
+    return result
+
+
+def _publish(updates: ActingUpdates | None, update: ActingUpdate) -> None:
+    if updates is not None:
+        try:
+            updates.acting_updated(copy.deepcopy(update))
+        except Exception:
+            # A read-only projection cannot alter acting or provider-call semantics.
+            return
+
+
+def _publish_termination(
+    updates: ActingUpdates | None,
+    transition: Transition,
+    result: ActingResult,
+) -> None:
+    _publish(
+        updates,
+        ActingUpdate(
+            "termination",
+            copy.deepcopy(transition.observation),
+            transition.state,
+            error=result.reason,
+            status=result.status,
+        ),
+    )

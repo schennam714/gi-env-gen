@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from .acting import play
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
+
+from .acting import ActingUpdates, play
 from .builder import (
     AcceptedBuild,
     BuildResult,
@@ -15,9 +19,16 @@ from .builder import (
     UnsupportedBuild,
     build,
 )
+from .dashboard import (
+    DASHBOARD_THEME,
+    DashboardProjection,
+    LiveDashboard,
+    generation_waiting,
+    log_summary,
+    render_dashboard,
+)
 from .evidence import save_run_evidence
 from .openai_provider import DEFAULT_MODEL, MissingCredential, OpenAIProvider
-from .runtime import start
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -36,83 +47,107 @@ def main(argv: Sequence[str] | None = None) -> int:
         provider = OpenAIProvider(model=args.model)
     except MissingCredential as error:
         parser.error(str(error))
-    result = build(args.prompt, provider)
-    print("=== Configuration ===")
-    print(f"Prompt: {args.prompt}")
-    print(f"Model: {args.model}")
-    print(f"Maximum steps: {args.max_steps}")
-    print("=== Generation ===")
-    print(f"Builder attempts: {len(result.attempts)}")
-    if isinstance(result, UnsupportedBuild):
-        print("=== Interpretation ===")
-        for item in result.interpretation:
-            print(f"- {item}")
-        print("Unsupported:", result.reason)
-        return _finish_without_acting(
+    console = Console(theme=DASHBOARD_THEME, highlight=False)
+    live: Live | None = None
+    if console.is_terminal:
+        live = Live(
+            generation_waiting(args.model),
+            console=console,
+            screen=False,
+            transient=False,
+            auto_refresh=False,
+            vertical_overflow="crop",
+        )
+        live.start(refresh=True)
+    else:
+        console.print(f"Generating with {args.model}...")
+    try:
+        result = build(args.prompt, provider)
+        if isinstance(result, UnsupportedBuild):
+            return _finish_without_acting(
+                result,
+                final_status="unsupported",
+                exit_code=2,
+                evidence_dir=evidence_dir,
+                original_prompt=args.prompt,
+                model=args.model,
+                max_steps=args.max_steps,
+                console=console,
+                live=live,
+            )
+        if isinstance(result, ProviderFailed):
+            return _finish_without_acting(
+                result,
+                final_status="provider_failure",
+                exit_code=5,
+                evidence_dir=evidence_dir,
+                original_prompt=args.prompt,
+                model=args.model,
+                max_steps=args.max_steps,
+                console=console,
+                live=live,
+            )
+        if isinstance(result, GenerationFailed):
+            return _finish_without_acting(
+                result,
+                final_status="retry_exhaustion",
+                exit_code=3,
+                evidence_dir=evidence_dir,
+                original_prompt=args.prompt,
+                model=args.model,
+                max_steps=args.max_steps,
+                console=console,
+                live=live,
+            )
+        assert isinstance(result, AcceptedBuild)
+        projection = DashboardProjection(
+            model=args.model,
+            environment=result.environment,
+            max_steps=args.max_steps,
+            evidence_path=evidence_dir,
+        )
+        updates: ActingUpdates = projection
+        if live is not None:
+            live.update(
+                render_dashboard(
+                    projection.frame,
+                    width=console.width,
+                    height=console.height,
+                ),
+                refresh=True,
+            )
+            updates = LiveDashboard(projection, live, console)
+        acting = play(
+            args.prompt,
             result,
-            final_status="unsupported",
-            exit_code=2,
-            evidence_dir=evidence_dir,
+            provider,
+            max_steps=args.max_steps,
+            updates=updates,
+        )
+        save_run_evidence(
+            evidence_dir,
             original_prompt=args.prompt,
             model=args.model,
             max_steps=args.max_steps,
+            build_result=result,
+            acting_result=acting,
         )
-    if isinstance(result, ProviderFailed):
-        print("Builder provider failure:", result.reason)
-        return _finish_without_acting(
-            result,
-            final_status="provider_failure",
-            exit_code=5,
-            evidence_dir=evidence_dir,
-            original_prompt=args.prompt,
-            model=args.model,
-            max_steps=args.max_steps,
-        )
-    if isinstance(result, GenerationFailed):
-        print("Generated program rejected:")
-        print(json.dumps([item.__dict__ for item in result.diagnostics], indent=2))
-        return _finish_without_acting(
-            result,
-            final_status="retry_exhaustion",
-            exit_code=3,
-            evidence_dir=evidence_dir,
-            original_prompt=args.prompt,
-            model=args.model,
-            max_steps=args.max_steps,
-        )
-    assert isinstance(result, AcceptedBuild)
-    print("=== Interpretation ===")
-    for item in result.interpretation:
-        print(f"- {item}")
-    print("=== Generated program ===")
-    print(json.dumps(result.environment.program, indent=2, sort_keys=True))
-    print("=== Validation ===")
-    print(f"success ({len(result.validation.replay)} replay steps)")
-    print("=== Frozen environment ===")
-    print(result.environment.content_hash)
-    print("=== Acting transitions ===")
-    acting = play(args.prompt, result, provider, max_steps=args.max_steps)
-    for transition in acting.transitions:
-        print(f"Step {transition.state.step}: {transition.outcome}")
-        print("\n".join(transition.observation["map"]))
-    final_transition = acting.transitions[-1] if acting.transitions else start(result.environment)
-    print("=== Objectives ===")
-    print(json.dumps(final_transition.observation["objectives"], indent=2))
-    print("=== Failures ===")
-    print(json.dumps(final_transition.observation["failures"], indent=2))
-    print("=== Final status ===")
-    print(acting.status)
-    save_run_evidence(
-        evidence_dir,
-        original_prompt=args.prompt,
-        model=args.model,
-        max_steps=args.max_steps,
-        build_result=result,
-        acting_result=acting,
-    )
-    print("=== Evidence ===")
-    print(evidence_dir)
-    return 0 if acting.status == "success" else 4
+        if live is not None:
+            live.update(
+                render_dashboard(
+                    projection.frame,
+                    width=console.width,
+                    height=console.height,
+                ),
+                refresh=True,
+            )
+        else:
+            for line in log_summary(projection.frame, builder_attempts=len(result.attempts)):
+                console.print(line, soft_wrap=True)
+        return 0 if acting.status == "success" else 4
+    finally:
+        if live is not None:
+            live.stop()
 
 
 def _positive_int(value: str) -> int:
@@ -131,9 +166,9 @@ def _finish_without_acting(
     original_prompt: str,
     model: str,
     max_steps: int,
+    console: Console,
+    live: Live | None,
 ) -> int:
-    print("=== Final status ===")
-    print(final_status)
     save_run_evidence(
         evidence_dir,
         original_prompt=original_prompt,
@@ -141,8 +176,24 @@ def _finish_without_acting(
         max_steps=max_steps,
         build_result=result,
     )
-    print("=== Evidence ===")
-    print(evidence_dir)
+    reason = getattr(result, "reason", None)
+    interpretation = getattr(result, "interpretation", ())
+    lines = [
+        f"Generation: {final_status} · {len(result.attempts)} builder attempts",
+        *(f"- {item}" for item in interpretation),
+    ]
+    if reason is not None:
+        lines.append(f"Reason: {reason}")
+    lines.append(f"Evidence: {evidence_dir}")
+    if live is None:
+        for line in lines:
+            console.print(line, soft_wrap=True)
+    else:
+        text = Text("\n".join(lines))
+        live.update(
+            Panel(Group(text), title="Generation stopped", border_style="red"),
+            refresh=True,
+        )
     return exit_code
 
 
