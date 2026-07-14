@@ -76,6 +76,7 @@ class ProviderFailed:
 
 
 BuildResult = AcceptedBuild | UnsupportedBuild | GenerationFailed | ProviderFailed
+MAX_BUILD_ATTEMPTS = 5
 
 
 def build(prompt: str, provider: BuilderProvider) -> BuildResult:
@@ -83,7 +84,7 @@ def build(prompt: str, provider: BuilderProvider) -> BuildResult:
     frozen_interpretation: tuple[str, ...] | None = None
     previous_response: JsonObject | None = None
     diagnostics: tuple[Diagnostic, ...] = ()
-    for _ in range(3):
+    for _ in range(MAX_BUILD_ATTEMPTS):
         request = BuildRequest(prompt, frozen_interpretation, previous_response, diagnostics)
         try:
             response = provider.generate_build(request)

@@ -171,6 +171,8 @@ def test_reviewer_evidence_distinguishes_invalid_attempts_from_retry_exhaustion(
         "invalid_generated_program",
         "invalid_generated_program",
         "invalid_generated_program",
+        "invalid_generated_program",
+        "invalid_generated_program",
     ]
     assert summary["final_status"] == "retry_exhaustion"
 
