@@ -13,6 +13,7 @@ from harness.dashboard import (
     format_rule,
     render_dashboard,
 )
+from harness.model import RunModels
 
 from .test_cli import reach_build_response
 
@@ -33,6 +34,9 @@ class ActorFake:
     def choose_action(self, observation: dict[str, Any]) -> dict[str, Any]:
         self.observations.append(deepcopy(observation))
         return deepcopy(self.actions[len(self.observations) - 1])
+
+
+REVIEWER_MODELS = RunModels(builder="builder-fake", actor="reviewer-fake")
 
 
 def dashboard_build_response() -> dict[str, Any]:
@@ -70,7 +74,7 @@ def test_rule_projection_renders_generated_records_at_fixed_terminal_widths() ->
     )
     assert isinstance(accepted, AcceptedBuild)
     projection = DashboardProjection(
-        model="reviewer-fake",
+        models=REVIEWER_MODELS,
         environment=accepted.environment,
         max_steps=12,
         evidence_path=Path("run-evidence/test"),
@@ -136,7 +140,7 @@ def test_successive_acting_updates_produce_authoritative_dashboard_frames() -> N
     accepted = build("Reach the beacon", BuildProviderFake(reach_build_response()))
     assert isinstance(accepted, AcceptedBuild)
     projection = DashboardProjection(
-        model="reviewer-fake",
+        models=REVIEWER_MODELS,
         environment=accepted.environment,
         max_steps=5,
         evidence_path=Path("run-evidence/test"),
@@ -242,7 +246,7 @@ def test_nested_conditions_and_wrapped_effects_keep_visual_hierarchy() -> None:
     accepted = build("Reach the beacon", BuildProviderFake(response))
     assert isinstance(accepted, AcceptedBuild)
     projection = DashboardProjection(
-        model="reviewer-fake",
+        models=REVIEWER_MODELS,
         environment=accepted.environment,
         max_steps=5,
         evidence_path=Path("run-evidence/test"),
@@ -266,7 +270,7 @@ def test_unusable_responses_each_publish_an_unchanged_error_frame() -> None:
     accepted = build("Reach the beacon", BuildProviderFake(reach_build_response()))
     assert isinstance(accepted, AcceptedBuild)
     projection = DashboardProjection(
-        model="reviewer-fake",
+        models=REVIEWER_MODELS,
         environment=accepted.environment,
         max_steps=5,
         evidence_path=Path("run-evidence/test"),
@@ -350,7 +354,7 @@ def test_terminal_frame_compacts_values_recent_events_objectives_and_failures() 
     accepted = build("Reach before energy is exhausted", BuildProviderFake(response))
     assert isinstance(accepted, AcceptedBuild)
     projection = DashboardProjection(
-        model="reviewer-fake",
+        models=REVIEWER_MODELS,
         environment=accepted.environment,
         max_steps=5,
         evidence_path=Path("run-evidence/test"),
@@ -377,7 +381,7 @@ def test_generated_failure_is_textually_marked_as_triggered() -> None:
     accepted = build("Reach before energy is exhausted", BuildProviderFake(response))
     assert isinstance(accepted, AcceptedBuild)
     projection = DashboardProjection(
-        model="reviewer-fake",
+        models=REVIEWER_MODELS,
         environment=accepted.environment,
         max_steps=3,
         evidence_path=Path("run-evidence/test"),

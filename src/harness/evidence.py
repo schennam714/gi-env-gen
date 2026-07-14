@@ -14,13 +14,14 @@ from .builder import (
     ProviderFailed,
     UnsupportedBuild,
 )
+from .model import RunModels
 
 
 def save_run_evidence(
     directory: Path,
     *,
     original_prompt: str,
-    model: str,
+    models: RunModels,
     max_steps: int,
     build_result: BuildResult,
     acting_result: ActingResult | None = None,
@@ -40,7 +41,7 @@ def save_run_evidence(
         directory / "generation.json",
         {
             "original_prompt": original_prompt,
-            "model": model,
+            "builder_model": models.builder,
             "max_steps": max_steps,
             "outcome": _build_outcome(build_result),
             "reason": getattr(build_result, "reason", None),
@@ -76,13 +77,15 @@ def save_run_evidence(
         if acting_result is not None:
             _write_json(
                 directory / "acting-rollout.json",
-                _acting_evidence(environment_hash, acting_result),
+                _acting_evidence(environment_hash, models.actor, acting_result),
             )
     final_status = acting_result.status if acting_result is not None else _build_outcome(build_result)
     _write_json(
         directory / "summary.json",
         {
             "original_prompt": original_prompt,
+            "builder_model": models.builder,
+            "actor_model": models.actor,
             "environment_hash": (
                 build_result.environment.content_hash
                 if isinstance(build_result, AcceptedBuild)
@@ -98,7 +101,11 @@ def save_run_evidence(
     )
 
 
-def _acting_evidence(environment_hash: str, result: ActingResult) -> dict[str, Any]:
+def _acting_evidence(
+    environment_hash: str,
+    actor_model: str,
+    result: ActingResult,
+) -> dict[str, Any]:
     completed_before: set[str] = set()
     steps: list[dict[str, Any]] = []
     for acting_step in result.steps:
@@ -139,6 +146,7 @@ def _acting_evidence(environment_hash: str, result: ActingResult) -> dict[str, A
         completed_before = completed_after
     return {
         "environment_hash": environment_hash,
+        "actor_model": actor_model,
         "steps": steps,
         "final_status": result.status,
         "reason": result.reason,

@@ -10,6 +10,12 @@ JsonObject = dict[str, Any]
 
 
 @dataclass(frozen=True)
+class RunModels:
+    builder: str
+    actor: str
+
+
+@dataclass(frozen=True)
 class FrozenEnvironment:
     """An immutable-by-interface, content-addressed environment program."""
 
@@ -24,4 +30,3 @@ class FrozenEnvironment:
 def freeze_environment(program: Mapping[str, Any]) -> FrozenEnvironment:
     canonical = json.dumps(program, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     return FrozenEnvironment(canonical, hashlib.sha256(canonical).hexdigest())
-

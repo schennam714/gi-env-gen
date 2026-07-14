@@ -15,7 +15,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from .acting import ActingUpdate, ActingUpdates
-from .model import FrozenEnvironment, JsonObject
+from .model import FrozenEnvironment, JsonObject, RunModels
 from .runtime import EventRecord, RuntimeState, start
 
 
@@ -83,7 +83,7 @@ class FailureView:
 
 @dataclass(frozen=True)
 class DashboardFrame:
-    model: str
+    models: RunModels
     environment_hash_prefix: str
     step: int
     max_steps: int
@@ -109,12 +109,12 @@ class DashboardProjection(ActingUpdates):
     def __init__(
         self,
         *,
-        model: str,
+        models: RunModels,
         environment: FrozenEnvironment,
         max_steps: int,
         evidence_path: Path,
     ) -> None:
-        self._model = model
+        self._models = models
         self._environment_hash_prefix = environment.content_hash[:10]
         self._program = environment.program
         self._max_steps = max_steps
@@ -133,7 +133,7 @@ class DashboardProjection(ActingUpdates):
         entities = tuple(_entity_view(item) for item in self._observation["entities"])
         completed = set(self._state.completed_objectives)
         return DashboardFrame(
-            model=self._model,
+            models=self._models,
             environment_hash_prefix=self._environment_hash_prefix,
             step=self._state.step,
             max_steps=self._max_steps,
@@ -390,7 +390,7 @@ def render_dashboard(
         return Group(_header(dashboard), world, details, _footer(dashboard))
     root = Layout(name="dashboard")
     root.split_column(
-        Layout(_header(dashboard), name="header", size=3),
+        Layout(_header(dashboard), name="header", size=4),
         Layout(name="body"),
         Layout(_footer(dashboard), name="footer", size=3),
     )
@@ -402,10 +402,10 @@ def render_dashboard(
     return root
 
 
-def generation_waiting(model: str) -> Panel:
+def generation_waiting(models: RunModels) -> Panel:
     text = Text()
     text.append("Generating environment\n", style="heading")
-    text.append(f"Model: {model}\n", style="muted")
+    text.append(f"Builder: {models.builder} · Actor: {models.actor}\n", style="muted")
     text.append("Waiting for builder response…", style="waiting")
     return Panel(text, border_style="yellow")
 
@@ -523,10 +523,11 @@ def _header(frame: DashboardFrame) -> Panel:
     )
     text = Text()
     text.append("Reviewer dashboard", style="heading")
-    text.append(f"  {frame.model}", style="muted")
     text.append(f"  env {frame.environment_hash_prefix}", style="muted")
     text.append(f"  turn {frame.step}/{frame.max_steps}  ")
     text.append(frame.status, style=status_style)
+    text.append(f"\nBuilder: {frame.models.builder}", style="muted")
+    text.append(f" · Actor: {frame.models.actor}", style="muted")
     return Panel(text, border_style="grey39")
 
 
@@ -661,6 +662,7 @@ def _compact_dashboard(frame: DashboardFrame) -> Panel:
     actions.add_row("Latest", Text(latest, style="failure" if frame.latest_error else "muted"))
 
     status = Text()
+    status.append(f"Builder: {frame.models.builder} · Actor: {frame.models.actor}\n", style="muted")
     status.append("Status  ", style="heading")
     status.append(frame.status)
 
@@ -698,7 +700,7 @@ def _compact_dashboard(frame: DashboardFrame) -> Panel:
     details.append(frame.evidence_path, style="muted")
 
     title = (
-        f"Reviewer dashboard · {frame.model} · env {frame.environment_hash_prefix} · "
+        f"Reviewer dashboard · env {frame.environment_hash_prefix} · "
         f"turn {frame.step}/{frame.max_steps} · {frame.status}"
     )
     return Panel(
