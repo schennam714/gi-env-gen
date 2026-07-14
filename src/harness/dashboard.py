@@ -167,6 +167,7 @@ class DashboardProjection(ActingUpdates):
 
     def acting_updated(self, update: ActingUpdate) -> None:
         previous_map = tuple(self._observation["map"])
+        previous_state = self._state
         self._observation = update.observation
         self._state = update.state
         if update.phase == "before_actor_request":
@@ -184,7 +185,12 @@ class DashboardProjection(ActingUpdates):
             self._latest_error = update.error
         elif update.phase == "after_transition":
             self._status = "running" if update.state.status == "running" else update.state.status
-            self._changed_cells = _changed_cells(previous_map, tuple(update.observation["map"]))
+            self._changed_cells = _changed_cells(
+                previous_map,
+                tuple(update.observation["map"]),
+                previous_state,
+                update.state,
+            )
             self._latest_action = _invocation_label(update.action)
             self._latest_action_name = _invocation_name(update.action)
             self._latest_error = None
@@ -212,14 +218,102 @@ class LiveDashboard(ActingUpdates):
 
 
 def format_rule(value: object) -> str:
-    """Format a generated generic operation without interpreting its mechanics."""
+    """Describe a generated generic operation without interpreting scenario mechanics."""
 
     if isinstance(value, Mapping):
         operation = value.get("operation")
         if isinstance(operation, str):
             if operation in {"all", "any"} and isinstance(value.get("conditions"), list):
-                children = ", ".join(format_rule(item) for item in value["conditions"])
-                return f"{operation}({children})"
+                children = "; ".join(format_rule(item) for item in value["conditions"])
+                return f"{operation}: {children or 'no conditions'}"
+            if operation == "not":
+                return f"not: {format_rule(value.get('condition'))}"
+            if operation == "at":
+                first = format_rule(value.get("first"))
+                second = format_rule(value.get("second"))
+                return f"at: {first} is at {second}"
+            if operation == "adjacent":
+                relation = (
+                    f"{format_rule(value.get('first'))} is next to "
+                    f"{format_rule(value.get('second'))}"
+                )
+                if "direction" in value:
+                    relation += f" toward {format_rule(value['direction'])}"
+                return f"adjacent: {relation}"
+            if operation == "can_move":
+                return (
+                    f"can_move: {format_rule(value.get('entity'))} can move "
+                    f"{format_rule(value.get('direction'))}"
+                )
+            if operation == "property_equals":
+                return (
+                    f"property_equals: {format_rule(value.get('entity'))}."
+                    f"{format_rule(value.get('property'))} is {format_rule(value.get('value'))}"
+                )
+            if operation == "value_compare":
+                comparators = {
+                    "eq": "=",
+                    "ne": "≠",
+                    "lt": "<",
+                    "lte": "≤",
+                    "gt": ">",
+                    "gte": "≥",
+                }
+                comparator_id = str(value.get("comparator"))
+                comparator = comparators.get(comparator_id, comparator_id)
+                return (
+                    f"value_compare: {format_rule(value.get('value'))} {comparator} "
+                    f"{format_rule(value.get('expected'))}"
+                )
+            if operation == "event_occurred":
+                target = (
+                    f" for {format_rule(value['target'])}" if "target" in value else ""
+                )
+                return (
+                    f"event_occurred: {format_rule(value.get('event'))}{target} in "
+                    f"{format_rule(value.get('scope'))}"
+                )
+            if operation == "move":
+                return (
+                    f"move: {format_rule(value.get('entity'))} moves "
+                    f"{format_rule(value.get('direction'))}"
+                )
+            if operation == "move_toward":
+                return (
+                    f"move_toward: {format_rule(value.get('entity'))} moves toward "
+                    f"{format_rule(value.get('target'))}"
+                )
+            if operation == "set_position":
+                return (
+                    f"set_position: {format_rule(value.get('entity'))} position ← "
+                    f"{format_rule(value.get('destination'))}"
+                )
+            if operation == "set_property":
+                return (
+                    f"set_property: {format_rule(value.get('entity'))}."
+                    f"{format_rule(value.get('property'))} ← {format_rule(value.get('value'))}"
+                )
+            if operation == "set_value":
+                return (
+                    f"set_value: {format_rule(value.get('value'))} ← "
+                    f"{format_rule(value.get('new_value'))}"
+                )
+            if operation == "change_value":
+                return (
+                    f"change_value: {format_rule(value.get('value'))} changes by "
+                    f"{format_rule(value.get('amount'))}"
+                )
+            if operation == "emit":
+                target = (
+                    f" for {format_rule(value['target'])}" if "target" in value else ""
+                )
+                return f"emit: event {format_rule(value.get('event'))}{target}"
+            if operation == "repeat":
+                effects = "; ".join(format_rule(item) for item in value.get("effects", []))
+                return (
+                    f"repeat: while {format_rule(value.get('while'))}; "
+                    f"do {effects or 'no effects'}"
+                )
             arguments = ", ".join(
                 f"{key}={format_rule(item)}"
                 for key, item in value.items()
@@ -353,13 +447,28 @@ def _invocation_label(value: object) -> str | None:
     return f"{action}({rendered_arguments})"
 
 
-def _changed_cells(before: tuple[str, ...], after: tuple[str, ...]) -> frozenset[tuple[int, int]]:
-    return frozenset(
+def _changed_cells(
+    before: tuple[str, ...],
+    after: tuple[str, ...],
+    before_state: RuntimeState,
+    after_state: RuntimeState,
+) -> frozenset[tuple[int, int]]:
+    changed = {
         (x, y)
         for y, row in enumerate(after)
         for x, character in enumerate(row)
         if y >= len(before) or x >= len(before[y]) or before[y][x] != character
-    )
+    }
+    for entity_id in before_state.positions.keys() | after_state.positions.keys():
+        before_position = before_state.positions.get(entity_id)
+        after_position = after_state.positions.get(entity_id)
+        if before_position == after_position:
+            continue
+        if before_position is not None:
+            changed.add(before_position)
+        if after_position is not None:
+            changed.add(after_position)
+    return frozenset(changed)
 
 
 def _header(frame: DashboardFrame) -> Panel:

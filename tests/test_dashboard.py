@@ -84,7 +84,10 @@ def test_rule_projection_renders_generated_records_at_fixed_terminal_widths() ->
                 {"operation": "property_equals", "entity": "$target", "property": "movable", "value": True},
             ],
         }
-    ) == "all(can_move(entity=$target, direction=$heading), property_equals(entity=$target, property=movable, value=true))"
+    ) == (
+        "all: can_move: $target can move $heading; "
+        "property_equals: $target.movable is true"
+    )
 
     wide = _render(projection.frame, width=120)
     narrow = _render(projection.frame, width=72, height=24)
@@ -97,6 +100,8 @@ def test_rule_projection_renders_generated_records_at_fixed_terminal_widths() ->
         assert "TRAVEL(heading: direction)" in output
         assert "Automatic rules" in output
         assert "consume_energy" in output
+        assert "change_value:" in output
+        assert "energy changes by -1" in output
         assert "Objectives" in output
         assert "energy_exhausted (dormant)" in output
         assert "energy=2" in output
@@ -152,15 +157,14 @@ def test_successive_acting_updates_produce_authoritative_dashboard_frames() -> N
     assert recorder.frames[2].changed_cells == {(1, 1), (2, 1)}
     assert recorder.frames[3].changed_cells == set()
     assert recorder.frames[-1].map_rows == tuple(observed.transitions[-1].observation["map"])
-    assert recorder.frames[-1].changed_cells == {(2, 1)}
+    assert recorder.frames[-1].changed_cells == {(2, 1), (3, 1)}
     selected_action = _render(recorder.frames[2], width=140)
     assert "› TRAVEL(heading: direction)" in selected_action
-    assert "when can_move(direction=$heading, entity=explorer)" in selected_action
-    assert "then 1. move(direction=$heading, entity=explorer)" in selected_action
+    assert "when can_move: explorer can move $heading" in selected_action
+    assert "then 1. move: explorer moves $heading" in selected_action
     compact_selected = _render(recorder.frames[2], width=72, height=24)
     assert "can_move" in compact_selected
-    assert "direction=$heading" in compact_selected
-    assert "entity=explorer" in compact_selected
+    assert "explorer can move $heading" in compact_selected
     assert "then 1. move" in compact_selected
     assert "success" in _render(recorder.frames[-1], width=72)
     assert "solution" not in repr(recorder.frames)
