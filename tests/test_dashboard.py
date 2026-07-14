@@ -41,7 +41,7 @@ def dashboard_build_response() -> dict[str, Any]:
     response["environment"]["after_action"] = [
         {
             "id": "consume_energy",
-            "when": [],
+            "when": [{"operation": "all", "conditions": []}],
             "effects": [
                 {"operation": "change_value", "value": "energy", "amount": -1},
                 {"operation": "emit", "event": "advanced", "target": "explorer"},
@@ -91,7 +91,24 @@ def test_rule_projection_renders_generated_records_at_fixed_terminal_widths() ->
 
     wide = _render(projection.frame, width=120)
     narrow = _render(projection.frame, width=72, height=24)
+    structured = _render(projection.frame, width=200)
     assert len(narrow.splitlines()) <= 24
+    assert "WHEN" in narrow
+    assert "THEN" in narrow
+    assert "1. change_value:" in narrow
+    assert "2. emit:" in narrow
+
+    structured_lines = structured.splitlines()
+    assert "Always (all: no conditions)" in structured
+    when_line = next(index for index, line in enumerate(structured_lines) if "WHEN" in line)
+    then_line = next(index for index, line in enumerate(structured_lines) if "THEN" in line)
+    first_effect_line = next(
+        index for index, line in enumerate(structured_lines) if "1. change_value:" in line
+    )
+    second_effect_line = next(
+        index for index, line in enumerate(structured_lines) if "2. emit:" in line
+    )
+    assert when_line < then_line == first_effect_line < second_effect_line
 
     for output, width in ((wide, 120), (narrow, 72)):
         assert all(len(line) <= width for line in output.splitlines())
@@ -160,14 +177,89 @@ def test_successive_acting_updates_produce_authoritative_dashboard_frames() -> N
     assert recorder.frames[-1].changed_cells == {(2, 1), (3, 1)}
     selected_action = _render(recorder.frames[2], width=140)
     assert "› TRAVEL(heading: direction)" in selected_action
-    assert "when can_move: explorer can move $heading" in selected_action
-    assert "then 1. move: explorer moves $heading" in selected_action
+    selected_lines = selected_action.splitlines()
+    when_line = next(index for index, line in enumerate(selected_lines) if "WHEN" in line)
+    condition_line = next(
+        index for index, line in enumerate(selected_lines) if "• can_move:" in line
+    )
+    then_line = next(index for index, line in enumerate(selected_lines) if "THEN" in line)
+    effect_line = next(
+        index for index, line in enumerate(selected_lines) if "1. move:" in line
+    )
+    assert when_line == condition_line < then_line == effect_line
+    assert "explorer can move $heading" in selected_action
+    assert "explorer moves $heading" in selected_action
     compact_selected = _render(recorder.frames[2], width=72, height=24)
     assert "can_move" in compact_selected
     assert "explorer can move $heading" in compact_selected
-    assert "then 1. move" in compact_selected
+    assert "THEN" in compact_selected
+    assert "1. move:" in compact_selected
     assert "success" in _render(recorder.frames[-1], width=72)
     assert "solution" not in repr(recorder.frames)
+
+
+def test_nested_conditions_and_wrapped_effects_keep_visual_hierarchy() -> None:
+    response = dashboard_build_response()
+    response["environment"]["after_action"] = [
+        {
+            "id": "nested_rule",
+            "when": [
+                {
+                    "operation": "all",
+                    "conditions": [
+                        {
+                            "operation": "any",
+                            "conditions": [
+                                {
+                                    "operation": "value_compare",
+                                    "value": "energy",
+                                    "comparator": "gt",
+                                    "expected": 0,
+                                },
+                                {
+                                    "operation": "not",
+                                    "condition": {
+                                        "operation": "property_equals",
+                                        "entity": "explorer",
+                                        "property": "solid",
+                                        "value": False,
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "effects": [
+                {
+                    "operation": "emit",
+                    "event": "generated_event_with_a_deliberately_long_name_and_continued_tail",
+                    "target": "explorer",
+                }
+            ],
+        }
+    ]
+    accepted = build("Reach the beacon", BuildProviderFake(response))
+    assert isinstance(accepted, AcceptedBuild)
+    projection = DashboardProjection(
+        model="reviewer-fake",
+        environment=accepted.environment,
+        max_steps=5,
+        evidence_path=Path("run-evidence/test"),
+    )
+
+    rendered = _render(projection.frame, width=100)
+    lines = rendered.splitlines()
+    all_line = next(line for line in lines if "• all:" in line)
+    any_line = next(line for line in lines if "• any:" in line)
+    value_line = next(line for line in lines if "• value_compare:" in line)
+    not_line = next(line for line in lines if "• not:" in line)
+    effect_line = next(line for line in lines if "1. emit:" in line)
+    continuation_line = next(line for line in lines if "tail for explorer" in line)
+
+    assert all_line.index("•") < any_line.index("•") < value_line.index("•")
+    assert any_line.index("•") < not_line.index("•")
+    assert continuation_line.index("tail") == effect_line.index("emit:")
 
 
 def test_unusable_responses_each_publish_an_unchanged_error_frame() -> None:

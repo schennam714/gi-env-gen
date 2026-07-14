@@ -217,16 +217,34 @@ class LiveDashboard(ActingUpdates):
         )
 
 
-def format_rule(value: object) -> str:
+def format_rule(value: object, *, multiline: bool = False) -> str:
     """Describe a generated generic operation without interpreting scenario mechanics."""
 
     if isinstance(value, Mapping):
         operation = value.get("operation")
         if isinstance(operation, str):
             if operation in {"all", "any"} and isinstance(value.get("conditions"), list):
+                if multiline:
+                    if not value["conditions"]:
+                        outcome = "Always" if operation == "all" else "Never"
+                        return f"{outcome} ({operation}: no conditions)"
+                    lines = [f"{operation}:"]
+                    for child in value["conditions"]:
+                        child_lines = format_rule(child, multiline=True).splitlines()
+                        lines.append(f"  • {child_lines[0]}")
+                        lines.extend(f"    {line}" for line in child_lines[1:])
+                    return "\n".join(lines)
                 children = "; ".join(format_rule(item) for item in value["conditions"])
                 return f"{operation}: {children or 'no conditions'}"
             if operation == "not":
+                if multiline:
+                    child_lines = format_rule(value.get("condition"), multiline=True).splitlines()
+                    return "\n".join(
+                        [
+                            f"not: {child_lines[0]}",
+                            *(f"  {line}" for line in child_lines[1:]),
+                        ]
+                    )
                 return f"not: {format_rule(value.get('condition'))}"
             if operation == "at":
                 first = format_rule(value.get("first"))
@@ -328,6 +346,26 @@ def format_rule(value: object) -> str:
     return json.dumps(value, sort_keys=True)
 
 
+def _when_then_block(conditions: tuple[str, ...], effects: tuple[str, ...]) -> Table:
+    rows = Table.grid(padding=(0, 1), expand=True)
+    rows.add_column(width=5, style="heading")
+    rows.add_column(width=3, justify="right")
+    rows.add_column(ratio=1, overflow="fold")
+    if conditions:
+        for index, condition in enumerate(conditions):
+            rows.add_row("WHEN" if index == 0 else "", "•", condition)
+    else:
+        rows.add_row("WHEN", "", "Always")
+
+    if effects:
+        for index, effect in enumerate(effects, start=1):
+            rows.add_row("THEN" if index == 1 else "", f"{index}.", effect)
+    else:
+        rows.add_row("THEN", "", "No effects")
+
+    return rows
+
+
 def render_dashboard(
     frame: DashboardFrame,
     *,
@@ -411,7 +449,9 @@ def _action_view(action: JsonObject) -> ActionView:
     return ActionView(
         name=action["name"],
         signature=f"{action['name']}({parameters})",
-        conditions=tuple(format_rule(item) for item in action["allowed_when"]),
+        conditions=tuple(
+            format_rule(item, multiline=True) for item in action["allowed_when"]
+        ),
         effects=tuple(format_rule(item) for item in action["effects"]),
     )
 
@@ -419,7 +459,7 @@ def _action_view(action: JsonObject) -> ActionView:
 def _automatic_rule_view(rule: JsonObject) -> AutomaticRuleView:
     return AutomaticRuleView(
         id=rule["id"],
-        conditions=tuple(format_rule(item) for item in rule["when"]),
+        conditions=tuple(format_rule(item, multiline=True) for item in rule["when"]),
         effects=tuple(format_rule(item) for item in rule["effects"]),
     )
 
@@ -533,11 +573,7 @@ def _actions_panel(frame: DashboardFrame) -> Panel:
         marker = "›" if action.name == frame.latest_action_name else " "
         table.add_row(Text(f"{marker} {action.signature}", no_wrap=True, overflow="ellipsis"))
         if action.name == frame.latest_action_name:
-            when = " ∧ ".join(action.conditions) if action.conditions else "always"
-            then = "; ".join(
-                f"{index}. {effect}" for index, effect in enumerate(action.effects, start=1)
-            ) or "no effects"
-            table.add_row(Text(f"  when {when}\n  then {then}", style="muted"))
+            table.add_row(_when_then_block(action.conditions, action.effects))
     latest = frame.latest_error or frame.latest_action or "—"
     table.add_row(Text(f"Latest: {latest}", style="failure" if frame.latest_error else "muted"))
     return Panel(table, border_style="cyan")
@@ -547,15 +583,18 @@ def _automatic_rules_panel(frame: DashboardFrame) -> Panel:
     table = Table(box=None, padding=(0, 1), expand=True)
     table.add_column("Rule", style="bright_white", no_wrap=True)
     table.add_column("when / then", overflow="fold")
-    if not frame.automatic_rules:
-        table.add_row("—", "No generated automatic rules")
-    for rule in frame.automatic_rules:
-        when = " ∧ ".join(rule.conditions) if rule.conditions else "always"
-        then = "; ".join(
-            f"{index}. {effect}" for index, effect in enumerate(rule.effects, start=1)
-        ) or "no effects"
-        table.add_row(rule.id, f"when {when}\nthen {then}")
+    _populate_automatic_rule_rows(table, frame.automatic_rules)
     return Panel(table, title="Automatic rules", border_style="magenta")
+
+
+def _populate_automatic_rule_rows(
+    table: Table,
+    rules: tuple[AutomaticRuleView, ...],
+) -> None:
+    if not rules:
+        table.add_row("—", "No generated automatic rules")
+    for rule in rules:
+        table.add_row(rule.id, _when_then_block(rule.conditions, rule.effects))
 
 
 def _objectives_panel(frame: DashboardFrame) -> Panel:
@@ -617,31 +656,21 @@ def _compact_dashboard(frame: DashboardFrame) -> Panel:
         None,
     )
     if selected is not None:
-        when = " ∧ ".join(selected.conditions) if selected.conditions else "always"
-        then = "; ".join(
-            f"{index}. {effect}" for index, effect in enumerate(selected.effects, start=1)
-        ) or "no effects"
-        actions.add_row("", Text(f"when {when}\nthen {then}", style="muted"))
+        actions.add_row("", _when_then_block(selected.conditions, selected.effects))
     latest = frame.latest_error or frame.latest_action or "—"
     actions.add_row("Latest", Text(latest, style="failure" if frame.latest_error else "muted"))
 
-    details = Text()
-    details.append("Status  ", style="heading")
-    details.append(frame.status)
-    details.append("\nAutomatic rules  ", style="heading")
-    if not frame.automatic_rules:
-        details.append("—")
-    for index, rule in enumerate(frame.automatic_rules):
-        if index:
-            details.append(" · ")
-        when = " ∧ ".join(rule.conditions) if rule.conditions else "always"
-        then = "; ".join(
-            f"{effect_index}. {effect}"
-            for effect_index, effect in enumerate(rule.effects, start=1)
-        ) or "no effects"
-        details.append(f"{rule.id}: when {when} then {then}")
+    status = Text()
+    status.append("Status  ", style="heading")
+    status.append(frame.status)
 
-    details.append("\nObjectives  ", style="heading")
+    automatic_rules = Table.grid(padding=(0, 1), expand=True)
+    automatic_rules.add_column(ratio=2, overflow="fold")
+    automatic_rules.add_column(ratio=5, overflow="fold")
+    _populate_automatic_rule_rows(automatic_rules, frame.automatic_rules)
+
+    details = Text()
+    details.append("Objectives  ", style="heading")
     markers = {"complete": "✓", "current": "›", "pending": "·"}
     details.append(
         " · ".join(
@@ -672,4 +701,15 @@ def _compact_dashboard(frame: DashboardFrame) -> Panel:
         f"Reviewer dashboard · {frame.model} · env {frame.environment_hash_prefix} · "
         f"turn {frame.step}/{frame.max_steps} · {frame.status}"
     )
-    return Panel(Group(world, actions, details), title=title, border_style="bright_blue")
+    return Panel(
+        Group(
+            world,
+            actions,
+            status,
+            Text("Automatic rules", style="heading"),
+            automatic_rules,
+            details,
+        ),
+        title=title,
+        border_style="bright_blue",
+    )
