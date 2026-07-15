@@ -72,8 +72,8 @@ Work the **frontier**: any ticket whose blockers are all done. Every refactor mu
 
 **Blocked by:** Ship a trustworthy reviewer-facing repository.
 
-- [ ] Run the complete offline test suite and strict type checking from documented commands.
-- [ ] Verify the CLI help and credential-free documentation path from tracked files.
-- [ ] Inspect a clean Git archive to confirm all promised reviewer artifacts are included and internal-only material remains excluded.
-- [ ] Compare representative runtime, evidence, and dashboard outputs with the pre-refactor behavior baseline.
-- [ ] Review the complete change against repository standards and these tickets, then resolve every material clarity or behavior-preservation finding.
+- [x] Run the complete offline test suite and strict type checking from documented commands.
+- [x] Verify the CLI help and credential-free documentation path from tracked files.
+- [x] Inspect a clean Git archive to confirm all promised reviewer artifacts are included and internal-only material remains excluded.
+- [x] Compare representative runtime, evidence, and dashboard outputs with the pre-refactor behavior baseline.
+- [x] Review the complete change against repository standards and these tickets, then resolve every material clarity or behavior-preservation finding.
