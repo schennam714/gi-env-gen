@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Mapping, TypeAlias, cast
 
 from .model import FrozenEnvironment, JsonObject
@@ -61,9 +61,46 @@ class Transition:
 
 
 @dataclass
-class _EffectExecution:
+class _TurnExecution:
+    previous: RuntimeState
+    positions: dict[str, tuple[int, int] | None]
+    properties: dict[str, dict[str, Any]]
+    values: dict[str, Any]
+    current_events: list[EventRecord]
+    episode_events: list[EventRecord]
     applications: int = 0
     states: list[RuntimeState] = field(default_factory=list)
+
+    @classmethod
+    def from_state(cls, state: RuntimeState) -> _TurnExecution:
+        return cls(
+            previous=state,
+            positions=dict(state.positions),
+            properties={key: dict(value) for key, value in state.properties.items()},
+            values=dict(state.values),
+            current_events=[],
+            episode_events=list(state.episode_events),
+        )
+
+    @property
+    def step_number(self) -> int:
+        return self.previous.step + 1
+
+    def snapshot(self) -> RuntimeState:
+        return RuntimeState(
+            positions=dict(self.positions),
+            properties={key: dict(value) for key, value in self.properties.items()},
+            values=dict(self.values),
+            completed_objectives=self.previous.completed_objectives,
+            current_step_events=tuple(self.current_events),
+            episode_events=tuple(self.episode_events),
+            step=self.step_number,
+            status="running",
+            failure_id=None,
+        )
+
+    def record_effect(self) -> None:
+        self.states.append(self.snapshot())
 
 
 def start(environment: FrozenEnvironment) -> Transition:
@@ -103,89 +140,13 @@ def step(
     applicable = all(
         _condition(program, state, condition, arguments) for condition in action["allowed_when"]
     )
-    positions = dict(state.positions)
-    properties = {key: dict(value) for key, value in state.properties.items()}
-    values = dict(state.values)
-    current_events: list[EventRecord] = []
-    episode_events = list(state.episode_events)
-    execution = _EffectExecution()
+    execution = _TurnExecution.from_state(state)
     if applicable:
-        for effect in action["effects"]:
-            _effect(
-                program,
-                state,
-                positions,
-                properties,
-                values,
-                current_events,
-                episode_events,
-                state.step + 1,
-                effect,
-                arguments,
-                execution,
-            )
+        _apply_effects(program, execution, action["effects"], arguments)
     direct_effect_count = len(execution.states)
-    for rule in program["after_action"]:
-        provisional = _state_after_effects(state, positions, properties, values, current_events, episode_events)
-        if all(_condition(program, provisional, condition, {}) for condition in rule["when"]):
-            for effect in rule["effects"]:
-                _effect(
-                    program,
-                    state,
-                    positions,
-                    properties,
-                    values,
-                    current_events,
-                    episode_events,
-                    state.step + 1,
-                    effect,
-                    {},
-                    execution,
-                )
-    next_state = RuntimeState(
-        positions=dict(positions),
-        properties={key: dict(value) for key, value in properties.items()},
-        values=dict(values),
-        completed_objectives=state.completed_objectives,
-        current_step_events=tuple(current_events),
-        episode_events=tuple(episode_events),
-        step=state.step + 1,
-        status="running",
-        failure_id=None,
-    )
-    _validate_runtime_state(program, next_state)
-    failure_id = next(
-        (
-            failure["id"]
-            for failure in program["failures"]
-            if _condition(program, next_state, failure["when"], {})
-        ),
-        None,
-    )
-    completed = list(next_state.completed_objectives)
-    if failure_id is None:
-        for objective in program["objectives"][len(completed) :]:
-            if not _condition(program, next_state, objective["satisfied_when"], {}):
-                break
-            completed.append(objective["id"])
-    status: RuntimeStatus = (
-        "failure"
-        if failure_id is not None
-        else "success"
-        if len(completed) == len(program["objectives"])
-        else "running"
-    )
-    next_state = RuntimeState(
-        **{
-            **next_state.__dict__,
-            "completed_objectives": tuple(completed),
-            "status": status,
-            "failure_id": failure_id,
-        }
-    )
-    outcome: TransitionOutcome = (
-        status if status in {"success", "failure"} else ("applied" if applicable else "inapplicable")
-    )
+    _apply_after_action_rules(program, execution)
+    next_state = _finish_turn(program, execution.snapshot())
+    outcome = _transition_outcome(next_state.status, applicable)
     return Transition(
         next_state,
         _observation(program, next_state, outcome),
@@ -195,6 +156,61 @@ def step(
         tuple(execution.states[:direct_effect_count]),
         tuple(execution.states[direct_effect_count:]),
     )
+
+
+def _apply_effects(
+    program: JsonObject,
+    execution: _TurnExecution,
+    effects: list[JsonObject],
+    arguments: Mapping[str, Any],
+) -> None:
+    for effect in effects:
+        _effect(program, execution, effect, arguments)
+
+
+def _apply_after_action_rules(program: JsonObject, execution: _TurnExecution) -> None:
+    for rule in program["after_action"]:
+        provisional = execution.snapshot()
+        if all(_condition(program, provisional, condition, {}) for condition in rule["when"]):
+            _apply_effects(program, execution, rule["effects"], {})
+
+
+def _finish_turn(program: JsonObject, state: RuntimeState) -> RuntimeState:
+    _validate_runtime_state(program, state)
+    failure_id = next(
+        (
+            failure["id"]
+            for failure in program["failures"]
+            if _condition(program, state, failure["when"], {})
+        ),
+        None,
+    )
+    completed = list(state.completed_objectives)
+    if failure_id is None:
+        for objective in program["objectives"][len(completed) :]:
+            if not _condition(program, state, objective["satisfied_when"], {}):
+                break
+            completed.append(objective["id"])
+    if failure_id is not None:
+        status: RuntimeStatus = "failure"
+    elif len(completed) == len(program["objectives"]):
+        status = "success"
+    else:
+        status = "running"
+    return replace(
+        state,
+        completed_objectives=tuple(completed),
+        status=status,
+        failure_id=failure_id,
+    )
+
+
+def _transition_outcome(status: RuntimeStatus, applicable: bool) -> TransitionOutcome:
+    if status == "success":
+        return "success"
+    if status == "failure":
+        return "failure"
+    return "applied" if applicable else "inapplicable"
 
 
 def _matching_action(program: JsonObject, invocation: Mapping[str, Any]) -> JsonObject:
@@ -299,16 +315,9 @@ def _condition(
 
 def _effect(
     program: JsonObject,
-    previous: RuntimeState,
-    positions: dict[str, tuple[int, int] | None],
-    properties: dict[str, dict[str, Any]],
-    values: dict[str, Any],
-    current_events: list[EventRecord],
-    episode_events: list[EventRecord],
-    step_number: int,
+    execution: _TurnExecution,
     effect: Mapping[str, Any],
     arguments: Mapping[str, Any],
-    execution: _EffectExecution,
     *,
     inside_repeat: bool = False,
 ) -> None:
@@ -321,7 +330,7 @@ def _effect(
             raise EnvironmentProgramError("nested repeat is invalid")
         while _condition(
             program,
-            _state_after_effects(previous, positions, properties, values, current_events, episode_events),
+            execution.snapshot(),
             effect["while"],
             arguments,
         ):
@@ -332,119 +341,80 @@ def _effect(
             for child in effect["effects"]:
                 _effect(
                     program,
-                    previous,
-                    positions,
-                    properties,
-                    values,
-                    current_events,
-                    episode_events,
-                    step_number,
+                    execution,
                     child,
                     arguments,
-                    execution,
                     inside_repeat=True,
                 )
         return
     if operation == "move":
         entity = _resolve(effect["entity"], arguments)
         direction = _resolve(effect["direction"], arguments)
-        if not _can_move(program, positions, properties, entity, direction):
+        if not _can_move(program, execution.positions, execution.properties, entity, direction):
             raise EnvironmentProgramError("move effect would create invalid state")
-        x, y = positions[entity] or (0, 0)
+        x, y = execution.positions[entity] or (0, 0)
         dx, dy = DIRECTIONS[direction]
-        positions[entity] = (x + dx, y + dy)
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        execution.positions[entity] = (x + dx, y + dy)
+        execution.record_effect()
         return
     if operation == "move_toward":
         entity = _resolve(effect["entity"], arguments)
         target = _resolve(effect["target"], arguments)
-        next_position = _shortest_path_step(program, positions, properties, entity, target)
+        next_position = _shortest_path_step(
+            program,
+            execution.positions,
+            execution.properties,
+            entity,
+            target,
+        )
         if next_position is not None:
-            positions[entity] = next_position
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+            execution.positions[entity] = next_position
+        execution.record_effect()
         return
     if operation == "set_position":
         entity = _resolve(effect["entity"], arguments)
         destination = effect["destination"]
         if isinstance(destination, list):
-            positions[entity] = (destination[0], destination[1])
+            execution.positions[entity] = (destination[0], destination[1])
         elif isinstance(destination, str):
             destination_entity = _resolve(destination, arguments)
-            positions[entity] = positions[destination_entity]
+            execution.positions[entity] = execution.positions[destination_entity]
         else:
-            positions[entity] = None
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+            execution.positions[entity] = None
+        execution.record_effect()
         return
     if operation == "set_property":
         entity = _resolve(effect["entity"], arguments)
         property_name = effect["property"]
-        if property_name not in properties[entity]:
+        if property_name not in execution.properties[entity]:
             raise EnvironmentProgramError(f"unknown property {property_name!r} on entity {entity!r}")
         value = _resolve(effect["value"], arguments) if isinstance(effect["value"], str) else effect["value"]
-        properties[entity][property_name] = value
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        execution.properties[entity][property_name] = value
+        execution.record_effect()
         return
     if operation == "set_value":
         value_id = effect["value"]
-        values[value_id] = _resolve(effect["new_value"], arguments) if isinstance(effect["new_value"], str) else effect["new_value"]
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        execution.values[value_id] = (
+            _resolve(effect["new_value"], arguments)
+            if isinstance(effect["new_value"], str)
+            else effect["new_value"]
+        )
+        execution.record_effect()
         return
     if operation == "change_value":
         value_id = effect["value"]
         amount = _resolve(effect["amount"], arguments) if isinstance(effect["amount"], str) else effect["amount"]
-        values[value_id] += amount
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        execution.values[value_id] += amount
+        execution.record_effect()
         return
     if operation == "emit":
         target = _resolve(effect["target"], arguments) if "target" in effect else None
-        event = EventRecord(effect["event"], target, step_number)
-        current_events.append(event)
-        episode_events.append(event)
-        _record_effect_state(previous, positions, properties, values, current_events, episode_events, execution)
+        event = EventRecord(effect["event"], target, execution.step_number)
+        execution.current_events.append(event)
+        execution.episode_events.append(event)
+        execution.record_effect()
         return
     raise EnvironmentProgramError(f"unsupported effect operation: {operation!r}")
-
-
-def _record_effect_state(
-    previous: RuntimeState,
-    positions: Mapping[str, tuple[int, int] | None],
-    properties: Mapping[str, Mapping[str, Any]],
-    values: Mapping[str, Any],
-    current_events: list[EventRecord],
-    episode_events: list[EventRecord],
-    execution: _EffectExecution,
-) -> None:
-    execution.states.append(
-        _state_after_effects(
-            previous,
-            dict(positions),
-            {entity: dict(entity_properties) for entity, entity_properties in properties.items()},
-            dict(values),
-            current_events,
-            episode_events,
-        )
-    )
-
-
-def _state_after_effects(
-    previous: RuntimeState,
-    positions: Mapping[str, tuple[int, int] | None],
-    properties: Mapping[str, Mapping[str, Any]],
-    values: Mapping[str, Any],
-    current_events: list[EventRecord],
-    episode_events: list[EventRecord],
-) -> RuntimeState:
-    return RuntimeState(
-        positions=positions,
-        properties=properties,
-        values=values,
-        completed_objectives=previous.completed_objectives,
-        current_step_events=tuple(current_events),
-        episode_events=tuple(episode_events),
-        step=previous.step + 1,
-        status="running",
-        failure_id=None,
-    )
 
 
 def _entity_ids(program: JsonObject) -> set[str]:
