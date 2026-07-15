@@ -1,0 +1,546 @@
+"""Semantic validation for untrusted builder-authored environment programs."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping, cast
+
+from .builder_schema import CONDITION_OPERATIONS, EFFECT_OPERATIONS
+from .model import FrozenEnvironment, JsonObject, freeze_environment
+from .runtime import EffectLimitExceeded, EnvironmentProgramError, Transition, _condition, start, step
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    phase: str
+    code: str
+    path: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ValidationEvidence:
+    solution: tuple[JsonObject, ...]
+    replay: tuple[Transition, ...]
+
+
+@dataclass(frozen=True)
+class ValidatedCandidate:
+    environment: FrozenEnvironment
+    evidence: ValidationEvidence
+
+
+def validate_candidate(
+    program: JsonObject,
+    solution: list[Any],
+) -> ValidatedCandidate | Diagnostic:
+    """Validate, freeze, and replay one generated candidate without repairing it."""
+
+    diagnostic = validate_environment_program(program)
+    if diagnostic is not None:
+        return diagnostic
+    frozen = freeze_environment(program)
+    initial = start(frozen)
+    for index, failure in enumerate(program["failures"]):
+        if _condition(program, initial.state, failure["when"], {}):
+            return Diagnostic(
+                "initial_state",
+                "FAILURE_SATISFIED_AT_RESET",
+                f"environment.failures[{index}]",
+                "Every failure must be false at reset.",
+            )
+    for index, objective in enumerate(program["objectives"]):
+        if _condition(program, initial.state, objective["satisfied_when"], {}):
+            return Diagnostic(
+                "initial_state",
+                "OBJECTIVE_SATISFIED_AT_RESET",
+                f"environment.objectives[{index}]",
+                "Every objective must be incomplete at reset.",
+            )
+    replay: list[Transition] = []
+    state = initial.state
+    for index, invocation in enumerate(solution):
+        try:
+            transition = step(frozen, state, invocation)
+        except EffectLimitExceeded as error:
+            return Diagnostic(
+                "solution_replay",
+                "EFFECT_LIMIT_EXCEEDED",
+                f"solution[{index}]",
+                str(error),
+            )
+        except (KeyError, TypeError, EnvironmentProgramError) as error:
+            return Diagnostic(
+                "solution_replay",
+                "INVALID_SOLUTION",
+                f"solution[{index}]",
+                str(error),
+            )
+        if not transition.applicable:
+            return Diagnostic(
+                "solution_replay",
+                "ACTION_INAPPLICABLE",
+                f"solution[{index}]",
+                "Proposed solution action was inapplicable.",
+            )
+        replay.append(transition)
+        state = transition.state
+        if state.status == "failure":
+            return Diagnostic(
+                "solution_replay",
+                "GENERATED_FAILURE",
+                f"solution[{index}]",
+                f"Proposed solution triggered failure {state.failure_id!r}.",
+            )
+    if state.status != "success":
+        return Diagnostic(
+            "solution_replay",
+            "OBJECTIVES_INCOMPLETE",
+            "solution",
+            "Proposed solution did not complete all objectives.",
+        )
+    return ValidatedCandidate(
+        frozen,
+        ValidationEvidence(tuple(dict(item) for item in solution), tuple(replay)),
+    )
+
+
+def validate_environment_program(program: JsonObject) -> Diagnostic | None:
+    required = {"actor", "map", "legend", "values", "actions", "after_action", "objectives", "failures"}
+    if set(program) != required:
+        missing = sorted(required - set(program))
+        field = missing[0] if missing else sorted(set(program) - required)[0]
+        return Diagnostic(
+            "shape",
+            "INVALID_ENVIRONMENT_SHAPE",
+            "environment." + field,
+            "Unexpected or missing field.",
+        )
+    rows = program["map"]
+    if not isinstance(rows, list) or not rows or not all(isinstance(row, str) and row for row in rows):
+        return Diagnostic("shape", "INVALID_MAP", "environment.map", "Map rows must be non-empty strings.")
+    if len({len(row) for row in rows}) != 1:
+        return Diagnostic("shape", "NON_RECTANGULAR_MAP", "environment.map", "Map must be rectangular.")
+    if any(not _printable_ascii(character) for row in rows for character in row):
+        return Diagnostic("shape", "INVALID_MAP_CHARACTER", "environment.map", "Map characters must be printable ASCII.")
+    legend = program["legend"]
+    if not isinstance(legend, dict) or any(token in {"#", "."} or not _printable_ascii(token) for token in legend):
+        return Diagnostic("shape", "INVALID_LEGEND", "environment.legend", "Legend tokens must be unique non-reserved characters.")
+    source = "".join(rows)
+    if any(token not in "#." and token not in legend for token in source):
+        return Diagnostic("references", "UNKNOWN_MAP_TOKEN", "environment.map", "Every entity token needs a legend entry.")
+    for token, declaration in legend.items():
+        token_count = source.count(token)
+        if token_count != 1:
+            entity_id = declaration.get("id") if isinstance(declaration, dict) else None
+            entity_label = repr(entity_id) if isinstance(entity_id, str) else "<invalid>"
+            return Diagnostic(
+                "initial_state",
+                "LEGEND_TOKEN_COUNT",
+                f"environment.legend.{token}",
+                (
+                    f"Legend token {token!r} for entity {entity_label} occurs "
+                    f"{token_count} times; expected exactly once."
+                ),
+            )
+    ids: list[str] = []
+    entity_properties: dict[str, set[str]] = {}
+    for token, declaration in legend.items():
+        if not isinstance(declaration, dict):
+            return Diagnostic("shape", "INVALID_ENTITY", f"environment.legend.{token}", "Invalid entity declaration.")
+        entity_id = declaration.get("id")
+        if not isinstance(entity_id, str) or not entity_id or entity_id in ids:
+            return Diagnostic(
+                "shape",
+                "INVALID_ENTITY_ID",
+                f"environment.legend.{token}.id",
+                "Entity IDs must be unique non-empty strings.",
+            )
+        props = declaration.get("properties")
+        if (
+            not isinstance(props, dict)
+            or not _printable_ascii(props.get("symbol"))
+            or type(props.get("solid")) is not bool
+            or any(not isinstance(name, str) or not _scalar(value) for name, value in props.items())
+        ):
+            return Diagnostic("shape", "INVALID_ENTITY_PROPERTIES", f"environment.legend.{token}.properties", "symbol, solid, and scalar property values are required.")
+        ids.append(entity_id)
+        entity_properties[entity_id] = set(props)
+    if program["actor"] not in ids:
+        return Diagnostic("references", "INVALID_ACTOR", "environment.actor", "Actor must name a declared entity.")
+    if not isinstance(program["values"], dict) or any(
+        not isinstance(name, str) or not name or not _scalar(value)
+        for name, value in program["values"].items()
+    ):
+        return Diagnostic("shape", "INVALID_VALUES", "environment.values", "Values must be named scalar values.")
+    values = cast(dict[str, Any], program["values"])
+    if not isinstance(program["actions"], list) or not program["actions"]:
+        return Diagnostic("shape", "INVALID_ACTIONS", "environment.actions", "At least one action is required.")
+    action_names: set[str] = set()
+    for index, action in enumerate(program["actions"]):
+        path = f"environment.actions[{index}]"
+        if not isinstance(action, dict) or set(action) != {"name", "parameters", "allowed_when", "effects"}:
+            return Diagnostic("shape", "INVALID_ACTION", path, "Invalid action shape.")
+        if not isinstance(action["name"], str) or not action["name"] or action["name"] in action_names:
+            return Diagnostic("shape", "INVALID_ACTION_NAME", path + ".name", "Action names must be unique non-empty strings.")
+        action_names.add(action["name"])
+        parameters = action["parameters"]
+        if not isinstance(parameters, dict) or any(
+            not isinstance(name, str)
+            or not name
+            or kind not in {"direction", "entity", "number", "string"}
+            for name, kind in parameters.items()
+        ):
+            return Diagnostic("shape", "INVALID_PARAMETERS", path + ".parameters", "Actions accept direction, entity, number, and string parameters.")
+        if not isinstance(action["allowed_when"], list) or not isinstance(action["effects"], list):
+            return Diagnostic("shape", "INVALID_ACTION_RULES", path, "Conditions and effects must be arrays.")
+        for condition_index, condition in enumerate(action["allowed_when"]):
+            error = _validate_condition(condition, ids, entity_properties, values, parameters, f"{path}.allowed_when[{condition_index}]")
+            if error:
+                return error
+        for effect_index, effect in enumerate(action["effects"]):
+            effect_path = f"{path}.effects[{effect_index}]"
+            error = _validate_effect(effect, ids, entity_properties, values, parameters, effect_path)
+            if error:
+                return error
+    if not isinstance(program["after_action"], list):
+        return Diagnostic("shape", "INVALID_AFTER_ACTION", "environment.after_action", "After-action rules must be an array.")
+    after_action_ids: set[str] = set()
+    for index, rule in enumerate(program["after_action"]):
+        path = f"environment.after_action[{index}]"
+        if not isinstance(rule, dict) or set(rule) != {"id", "when", "effects"}:
+            return Diagnostic("shape", "INVALID_AFTER_ACTION", path, "Invalid after-action rule shape.")
+        if not isinstance(rule["id"], str) or not rule["id"] or rule["id"] in after_action_ids:
+            return Diagnostic("shape", "INVALID_AFTER_ACTION_ID", path + ".id", "After-action IDs must be unique non-empty strings.")
+        after_action_ids.add(rule["id"])
+        if not isinstance(rule["when"], list) or not isinstance(rule["effects"], list):
+            return Diagnostic("shape", "INVALID_AFTER_ACTION", path, "Conditions and effects must be arrays.")
+        for condition_index, condition in enumerate(rule["when"]):
+            error = _validate_condition(condition, ids, entity_properties, values, {}, f"{path}.when[{condition_index}]")
+            if error:
+                return error
+        for effect_index, effect in enumerate(rule["effects"]):
+            error = _validate_effect(effect, ids, entity_properties, values, {}, f"{path}.effects[{effect_index}]")
+            if error:
+                return error
+    if not isinstance(program["objectives"], list) or not program["objectives"]:
+        return Diagnostic("shape", "INVALID_OBJECTIVES", "environment.objectives", "At least one objective is required.")
+    objective_ids: set[str] = set()
+    for index, objective in enumerate(program["objectives"]):
+        path = f"environment.objectives[{index}]"
+        if not isinstance(objective, dict) or set(objective) != {"id", "description", "satisfied_when"}:
+            return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Invalid objective shape.")
+        if not isinstance(objective["id"], str) or not objective["id"] or objective["id"] in objective_ids or not isinstance(objective["description"], str):
+            return Diagnostic("shape", "INVALID_OBJECTIVE", path, "Objective IDs must be unique non-empty strings and descriptions textual.")
+        objective_ids.add(objective["id"])
+        error = _validate_condition(objective["satisfied_when"], ids, entity_properties, values, {}, path + ".satisfied_when")
+        if error:
+            return error
+    if not isinstance(program["failures"], list):
+        return Diagnostic("shape", "INVALID_FAILURES", "environment.failures", "Failures must be an array.")
+    failure_ids: set[str] = set()
+    for index, failure in enumerate(program["failures"]):
+        path = f"environment.failures[{index}]"
+        if (
+            not isinstance(failure, dict)
+            or set(failure) != {"id", "description", "when"}
+            or not isinstance(failure["id"], str)
+            or not failure["id"]
+            or not isinstance(failure["description"], str)
+            or failure["id"] in failure_ids
+        ):
+            return Diagnostic("shape", "INVALID_FAILURE", path, "Failure IDs must be unique non-empty strings and descriptions textual.")
+        failure_ids.add(failure["id"])
+        error = _validate_condition(failure["when"], ids, entity_properties, values, {}, path + ".when")
+        if error:
+            return error
+    return None
+
+
+def _validate_condition(
+    condition: Any,
+    ids: list[str],
+    entity_properties: Mapping[str, set[str]],
+    values: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    path: str,
+) -> Diagnostic | None:
+    if not isinstance(condition, dict) or condition.get("operation") not in CONDITION_OPERATIONS:
+        return Diagnostic("shape", "INVALID_CONDITION", path, "Unsupported condition operation.")
+    operation = condition["operation"]
+    if operation in {"all", "any"}:
+        if set(condition) != {"operation", "conditions"} or not isinstance(condition["conditions"], list):
+            return Diagnostic("shape", "INVALID_CONDITION", path, "Boolean conditions require a conditions array.")
+        for index, child in enumerate(condition["conditions"]):
+            error = _validate_condition(
+                child,
+                ids,
+                entity_properties,
+                values,
+                parameters,
+                f"{path}.conditions[{index}]",
+            )
+            if error:
+                return error
+        return None
+    if operation == "not":
+        if set(condition) != {"operation", "condition"}:
+            return Diagnostic("shape", "INVALID_CONDITION", path, "not requires exactly one condition.")
+        return _validate_condition(
+            condition["condition"],
+            ids,
+            entity_properties,
+            values,
+            parameters,
+            path + ".condition",
+        )
+    if operation == "at":
+        expected = {"operation", "first", "second"}
+    elif operation == "adjacent":
+        expected = {"operation", "first", "second"} | ({"direction"} if "direction" in condition else set())
+    elif operation == "can_move":
+        expected = {"operation", "entity", "direction"}
+    elif operation == "property_equals":
+        expected = {"operation", "entity", "property", "value"}
+    elif operation == "event_occurred":
+        expected = {"operation", "event", "scope"} | ({"target"} if "target" in condition else set())
+    else:
+        expected = {"operation", "value", "comparator", "expected"}
+    if set(condition) != expected:
+        return Diagnostic("shape", "INVALID_CONDITION", path, "Condition fields do not match its operation.")
+    if operation in {"at", "adjacent"}:
+        for key in ("first", "second"):
+            if not _entity_reference(condition[key], ids, parameters):
+                return Diagnostic("references", "UNKNOWN_ENTITY", path + "." + key, "Unknown entity reference.")
+        if operation == "adjacent" and "direction" in condition and not _direction_reference(condition["direction"], parameters):
+            return Diagnostic("references", "INVALID_DIRECTION_REFERENCE", path + ".direction", "Unknown direction or parameter.")
+        return None
+    if operation == "can_move":
+        return _validate_entity_and_direction(condition, ids, parameters, path)
+    if operation == "event_occurred":
+        if not isinstance(condition["event"], str) or not condition["event"]:
+            return Diagnostic("shape", "INVALID_EVENT", path + ".event", "Event name must be a non-empty string.")
+        if not isinstance(condition["scope"], str) or condition["scope"] not in {"current_step", "episode"}:
+            return Diagnostic("shape", "INVALID_EVENT_SCOPE", path + ".scope", "Event scope must be current_step or episode.")
+        if "target" in condition and not _entity_reference(condition["target"], ids, parameters):
+            return Diagnostic("references", "UNKNOWN_ENTITY", path + ".target", "Unknown entity reference.")
+        return None
+    if operation == "value_compare":
+        value_id = condition["value"]
+        if not isinstance(value_id, str) or value_id not in values:
+            return Diagnostic("references", "UNKNOWN_VALUE", path + ".value", "Unknown global value.")
+        if not _numeric(values[value_id]):
+            return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".value", "Compared values must be numeric.")
+        if condition["comparator"] not in {"eq", "ne", "lt", "lte", "gt", "gte"}:
+            return Diagnostic("shape", "INVALID_COMPARATOR", path + ".comparator", "Unknown value comparator.")
+        expected_value = condition["expected"]
+        if isinstance(expected_value, str) and expected_value.startswith("$"):
+            if parameters.get(expected_value[1:]) != "number":
+                return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + ".expected", "Expected a numeric parameter reference.")
+        elif not _numeric(expected_value):
+            return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".expected", "Expected value must be numeric.")
+        return None
+    entity = condition["entity"]
+    if not _entity_reference(entity, ids, parameters):
+        return Diagnostic("references", "UNKNOWN_ENTITY", path + ".entity", "Unknown entity reference.")
+    if not isinstance(condition["property"], str):
+        return Diagnostic("shape", "INVALID_PROPERTY", path + ".property", "Property name must be a string.")
+    if entity in ids and condition["property"] not in entity_properties[entity]:
+        return Diagnostic("references", "UNKNOWN_PROPERTY", path + ".property", "Unknown entity property.")
+    if (
+        isinstance(entity, str)
+        and entity.startswith("$")
+        and not any(condition["property"] in properties for properties in entity_properties.values())
+    ):
+        return Diagnostic("references", "UNKNOWN_PROPERTY", path + ".property", "Unknown entity property.")
+    if not _scalar_or_parameter(condition["value"], parameters):
+        return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + ".value", "Invalid scalar or parameter reference.")
+    return None
+
+
+def _validate_entity_and_direction(value: Mapping[str, Any], ids: list[str], parameters: Mapping[str, Any], path: str) -> Diagnostic | None:
+    entity = value["entity"]
+    direction = value["direction"]
+    if not _entity_reference(entity, ids, parameters):
+        return Diagnostic("references", "UNKNOWN_ENTITY", path + ".entity", "Unknown entity reference.")
+    if not _direction_reference(direction, parameters):
+        return Diagnostic("references", "INVALID_DIRECTION_REFERENCE", path + ".direction", "Unknown direction or parameter.")
+    return None
+
+
+def _validate_effect(
+    effect: Any,
+    ids: list[str],
+    entity_properties: Mapping[str, set[str]],
+    values: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    path: str,
+    *,
+    allow_repeat: bool = True,
+) -> Diagnostic | None:
+    if not isinstance(effect, dict) or effect.get("operation") not in EFFECT_OPERATIONS:
+        return Diagnostic("shape", "INVALID_EFFECT", path, "Unsupported effect operation.")
+    operation = effect["operation"]
+    if operation == "repeat":
+        if not allow_repeat:
+            return Diagnostic("shape", "NESTED_REPEAT", path, "repeat cannot contain repeat.")
+        if set(effect) != {"operation", "while", "effects"} or not isinstance(effect["effects"], list):
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid repeat effect shape.")
+        error = _validate_condition(
+            effect["while"],
+            ids,
+            entity_properties,
+            values,
+            parameters,
+            path + ".while",
+        )
+        if error:
+            return error
+        for index, child in enumerate(effect["effects"]):
+            error = _validate_effect(
+                child,
+                ids,
+                entity_properties,
+                values,
+                parameters,
+                f"{path}.effects[{index}]",
+                allow_repeat=False,
+            )
+            if error:
+                return error
+        return None
+    if operation == "move":
+        if set(effect) != {"operation", "entity", "direction"}:
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid move effect shape.")
+        return _validate_entity_and_direction(effect, ids, parameters, path)
+    if operation == "move_toward":
+        if set(effect) != {"operation", "entity", "target"}:
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid move_toward effect shape.")
+        for key in ("entity", "target"):
+            if not _entity_reference(effect[key], ids, parameters):
+                return Diagnostic("references", "UNKNOWN_ENTITY", path + "." + key, "Unknown entity reference.")
+        return None
+    if operation == "set_position":
+        if set(effect) != {"operation", "entity", "destination"}:
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid set_position effect shape.")
+        if not _entity_reference(effect["entity"], ids, parameters):
+            return Diagnostic("references", "UNKNOWN_ENTITY", path + ".entity", "Unknown entity reference.")
+        destination = effect["destination"]
+        if destination is None:
+            return None
+        if isinstance(destination, str):
+            if not _entity_reference(destination, ids, parameters):
+                return Diagnostic(
+                    "references",
+                    "UNKNOWN_ENTITY",
+                    path + ".destination",
+                    "Unknown entity reference.",
+                )
+            return None
+        if (
+            not isinstance(destination, list)
+            or len(destination) != 2
+            or any(type(coordinate) is not int for coordinate in destination)
+        ):
+            return Diagnostic(
+                "shape",
+                "INVALID_POSITION",
+                path + ".destination",
+                "Position must be a two-integer coordinate, entity reference, or null.",
+            )
+        return None
+    if operation == "set_property":
+        if set(effect) != {"operation", "entity", "property", "value"}:
+            return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid set_property effect shape.")
+        entity = effect["entity"]
+        if not _entity_reference(entity, ids, parameters):
+            return Diagnostic("references", "UNKNOWN_ENTITY", path + ".entity", "Unknown entity reference.")
+        if not isinstance(effect["property"], str):
+            return Diagnostic("shape", "INVALID_PROPERTY", path + ".property", "Property name must be a string.")
+        if entity in ids and effect["property"] not in entity_properties[entity]:
+            return Diagnostic("references", "UNKNOWN_PROPERTY", path + ".property", "Unknown entity property.")
+        if (
+            isinstance(entity, str)
+            and entity.startswith("$")
+            and any(effect["property"] not in properties for properties in entity_properties.values())
+        ):
+            return Diagnostic(
+                "references",
+                "UNKNOWN_PROPERTY",
+                path + ".property",
+                "A property written through an entity parameter must exist on every possible entity target.",
+            )
+        if not _scalar_or_parameter(effect["value"], parameters):
+            return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + ".value", "Invalid scalar or parameter reference.")
+        if effect["property"] == "symbol" and not _printable_ascii(effect["value"]):
+            return Diagnostic("shape", "INVALID_SYMBOL_VALUE", path + ".value", "symbol must remain one printable ASCII character.")
+        if effect["property"] == "solid" and type(effect["value"]) is not bool:
+            return Diagnostic("shape", "INVALID_SOLID_VALUE", path + ".value", "solid must remain boolean.")
+        return None
+    if operation in {"set_value", "change_value"}:
+        expected_fields = {"operation", "value", "new_value" if operation == "set_value" else "amount"}
+        if set(effect) != expected_fields:
+            return Diagnostic("shape", "INVALID_EFFECT", path, f"Invalid {operation} effect shape.")
+        value_id = effect["value"]
+        if not isinstance(value_id, str) or value_id not in values:
+            return Diagnostic("references", "UNKNOWN_VALUE", path + ".value", "Unknown global value.")
+        field = "new_value" if operation == "set_value" else "amount"
+        new_value = effect[field]
+        if isinstance(new_value, str) and new_value.startswith("$"):
+            parameter_type = parameters.get(new_value[1:])
+            required_type = "number" if operation == "change_value" else _parameter_type(values[value_id])
+            if parameter_type != required_type:
+                return Diagnostic("references", "INVALID_VALUE_REFERENCE", path + "." + field, "Invalid or incompatible parameter reference.")
+        elif operation == "change_value":
+            if not _numeric(values[value_id]) or not _numeric(new_value):
+                return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path, "change_value requires numeric values.")
+        elif not (_numeric(new_value) and _numeric(values[value_id])) and type(new_value) is not type(values[value_id]):
+            return Diagnostic("references", "INCOMPATIBLE_VALUE_TYPE", path + ".new_value", "set_value must preserve the declared value type.")
+        return None
+    expected = {"operation", "event"} | ({"target"} if "target" in effect else set())
+    if set(effect) != expected:
+        return Diagnostic("shape", "INVALID_EFFECT", path, "Invalid emit effect shape.")
+    if not isinstance(effect["event"], str) or not effect["event"]:
+        return Diagnostic("shape", "INVALID_EFFECT", path + ".event", "Emitted event name must be a non-empty string.")
+    if "target" in effect and not _entity_reference(effect["target"], ids, parameters):
+        return Diagnostic("references", "UNKNOWN_ENTITY", path + ".target", "Unknown entity reference.")
+    return None
+
+
+def _entity_reference(value: Any, ids: list[str], parameters: Mapping[str, Any]) -> bool:
+    return isinstance(value, str) and (
+        value in ids or (value.startswith("$") and parameters.get(value[1:]) == "entity")
+    )
+
+
+def _direction_reference(value: Any, parameters: Mapping[str, Any]) -> bool:
+    return isinstance(value, str) and (
+        value in {"UP", "RIGHT", "DOWN", "LEFT"}
+        or (value.startswith("$") and parameters.get(value[1:]) == "direction")
+    )
+
+
+def _scalar_or_parameter(value: Any, parameters: Mapping[str, Any]) -> bool:
+    if isinstance(value, str) and value.startswith("$"):
+        return value[1:] in parameters
+    return _scalar(value)
+
+
+def _scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float, str))
+
+
+def _numeric(value: Any) -> bool:
+    return type(value) in {int, float}
+
+
+def _parameter_type(value: Any) -> str | None:
+    if _numeric(value):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    return None
+
+
+def _printable_ascii(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 1 and 0x20 <= ord(value) <= 0x7E

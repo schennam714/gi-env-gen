@@ -9,7 +9,7 @@ from typing import Any, Callable
 from .acting import UnusableActorResponse
 from .builder import BuildRequest, CandidateRejected, Diagnostic
 from .model import JsonObject
-from .structured_output import (
+from .builder_schema import (
     MANIFEST_SCHEMA,
     build_response_schema,
     manifest_mismatch,
