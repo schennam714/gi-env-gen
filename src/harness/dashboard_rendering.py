@@ -50,6 +50,11 @@ class LiveDashboard(ActingObserver):
             refresh=True,
         )
 
+    def acting_updated(self, update: ActingUpdate) -> None:
+        """Forward the previous observer method to the explicit observer contract."""
+
+        self.on_acting_update(update)
+
 
 
 def _when_then_block(conditions: tuple[str, ...], effects: tuple[str, ...]) -> Table:

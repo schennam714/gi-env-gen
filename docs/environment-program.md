@@ -52,7 +52,7 @@ type EntityId = string;
 type ValueId = string;
 type ObjectiveId = string;
 type MapToken = string;
-type Coordinate = [number, number];
+type Coordinate = [number, number]; // both JSON numbers must be integers
 
 type EnvironmentProgram = {
   actor: EntityId;

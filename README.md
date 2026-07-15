@@ -45,8 +45,9 @@ uv run --extra dev pytest
 uv run --extra dev mypy src/harness scripts/smoke_builder_matrix.py
 ```
 
-The 101 tests use provider fakes. They make no live API calls and never present
-hand-authored fixture programs as generated output.
+The offline tests use clearly named hand-authored fixtures through provider fakes and
+make no live API calls. Live builder reliability is measured separately by the
+credentialed smoke path below.
 
 ## Architecture and reading order
 

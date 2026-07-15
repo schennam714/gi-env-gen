@@ -1,7 +1,7 @@
 from copy import deepcopy
 from typing import Any
 
-from harness.acting import ActingResult, play
+from harness.acting import ActingResult, ActingUpdate, play
 from harness.builder import AcceptedBuild, build
 
 from .fixtures import reach_build_response
@@ -76,3 +76,34 @@ def test_acting_provider_failure_is_attributed_without_advancing_state() -> None
     assert result.transitions == ()
     assert result.steps[0].response_attempts[0].response is None
     assert result.steps[0].response_attempts[0].error == "actor service unavailable"
+
+
+def test_previous_acting_observer_contract_remains_compatible() -> None:
+    accepted = build("Reach the beacon", FakeProvider(reach_build_response()))
+    assert isinstance(accepted, AcceptedBuild)
+
+    class PreviousObserver:
+        def __init__(self) -> None:
+            self.updates: list[ActingUpdate] = []
+
+        def acting_updated(self, update: ActingUpdate) -> None:
+            self.updates.append(update)
+
+    observer = PreviousObserver()
+    result = play(
+        "Reach the beacon",
+        accepted,
+        FakeActor(
+            [
+                {"action": "TRAVEL", "arguments": {"heading": "RIGHT"}},
+                {"action": "TRAVEL", "arguments": {"heading": "RIGHT"}},
+            ]
+        ),
+        max_steps=5,
+        updates=observer,
+    )
+
+    assert result.status == "success"
+    assert observer.updates[-1].phase == "termination"
+    first = observer.updates[0]
+    assert ActingUpdate(first.phase, first.observation, first.state) == first

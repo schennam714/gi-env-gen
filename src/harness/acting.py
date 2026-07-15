@@ -38,7 +38,7 @@ ActingUpdatePhase: TypeAlias = Literal[
 ]
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class ActingUpdate:
     phase: ActingUpdatePhase
     observation: JsonObject
@@ -52,6 +52,12 @@ class ActingUpdate:
 
 class ActingObserver(Protocol):
     def on_acting_update(self, update: ActingUpdate) -> None: ...
+
+
+class ActingUpdates(Protocol):
+    """Compatibility protocol for observers written before the clarity refactor."""
+
+    def acting_updated(self, update: ActingUpdate) -> None: ...
 
 
 class UnusableActorResponse(ValueError):
@@ -99,7 +105,7 @@ def play(
     provider: ActingProvider,
     *,
     max_steps: int,
-    updates: ActingObserver | None = None,
+    updates: ActingObserver | ActingUpdates | None = None,
 ) -> ActingResult:
     if max_steps < 1:
         raise ValueError("max_steps must be positive")
@@ -183,10 +189,10 @@ def play(
 
 def _request_action(
     accepted: AcceptedBuild,
-    current: Transition,
+    current_transition: Transition,
     observation: JsonObject,
     provider: ActingProvider,
-    updates: ActingObserver | None,
+    updates: ActingObserver | ActingUpdates | None,
 ) -> _ActionRequestResult:
     response_attempts: list[ActorResponseAttempt] = []
     for _ in range(3):
@@ -202,7 +208,7 @@ def _request_action(
             ActingUpdate(
                 phase="before_actor_request",
                 observation=copy.deepcopy(attempt_observation),
-                state=current.state,
+                state=current_transition.state,
             ),
         )
         try:
@@ -220,7 +226,7 @@ def _request_action(
                 ActingUpdate(
                     phase="after_response_attempt",
                     observation=copy.deepcopy(attempt_observation),
-                    state=current.state,
+                    state=current_transition.state,
                     response=copy.deepcopy(error.response),
                     error=str(error),
                 ),
@@ -233,7 +239,7 @@ def _request_action(
                 ActingUpdate(
                     phase="after_response_attempt",
                     observation=copy.deepcopy(attempt_observation),
-                    state=current.state,
+                    state=current_transition.state,
                     error=str(error),
                 ),
             )
@@ -249,12 +255,16 @@ def _request_action(
             ActingUpdate(
                 phase="after_response_attempt",
                 observation=copy.deepcopy(attempt_observation),
-                state=current.state,
+                state=current_transition.state,
                 response=copy.deepcopy(invocation),
             ),
         )
         try:
-            next_transition = step(accepted.environment, current.state, invocation)
+            next_transition = step(
+                accepted.environment,
+                current_transition.state,
+                invocation,
+            )
         except UnusableActorOutputError as error:
             response_attempts.append(
                 ActorResponseAttempt(
@@ -268,7 +278,7 @@ def _request_action(
                 ActingUpdate(
                     phase="response_error",
                     observation=copy.deepcopy(attempt_observation),
-                    state=current.state,
+                    state=current_transition.state,
                     response=copy.deepcopy(invocation),
                     error=str(error),
                 ),
@@ -287,7 +297,7 @@ def _request_action(
                 ActingUpdate(
                     phase="response_error",
                     observation=copy.deepcopy(attempt_observation),
-                    state=current.state,
+                    state=current_transition.state,
                     response=copy.deepcopy(invocation),
                     error=str(error),
                     action=copy.deepcopy(invocation),
@@ -317,17 +327,24 @@ def _request_action(
     )
 
 
-def _publish(updates: ActingObserver | None, update: ActingUpdate) -> None:
+def _publish(
+    updates: ActingObserver | ActingUpdates | None,
+    update: ActingUpdate,
+) -> None:
     if updates is not None:
         try:
-            updates.on_acting_update(copy.deepcopy(update))
+            published = copy.deepcopy(update)
+            if hasattr(updates, "on_acting_update"):
+                updates.on_acting_update(published)
+            else:
+                updates.acting_updated(published)
         except Exception:
             # A read-only projection cannot alter acting or provider-call semantics.
             return
 
 
 def _publish_termination(
-    updates: ActingObserver | None,
+    updates: ActingObserver | ActingUpdates | None,
     transition: Transition,
     result: ActingResult,
 ) -> None:

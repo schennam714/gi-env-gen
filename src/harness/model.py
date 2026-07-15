@@ -4,7 +4,9 @@ import copy
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
+
+from .program import EnvironmentProgram
 
 JsonObject = dict[str, Any]
 
@@ -23,8 +25,10 @@ class FrozenEnvironment:
     content_hash: str
 
     @property
-    def program(self) -> JsonObject:
-        return copy.deepcopy(json.loads(self._canonical_json))
+    def program(self) -> EnvironmentProgram:
+        """Return a detached copy of the validated environment-program JSON."""
+
+        return cast(EnvironmentProgram, copy.deepcopy(json.loads(self._canonical_json)))
 
 
 def freeze_environment(program: Mapping[str, Any]) -> FrozenEnvironment:

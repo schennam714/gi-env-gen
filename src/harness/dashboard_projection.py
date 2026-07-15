@@ -98,7 +98,7 @@ class DashboardProjection(ActingObserver):
     ) -> None:
         self._models = models
         self._environment_hash_prefix = environment.content_hash[:10]
-        self._program = environment.program
+        self._program = cast(JsonObject, environment.program)
         self._max_steps = max_steps
         self._evidence_path = str(evidence_path)
         initial = start(environment)
@@ -179,6 +179,11 @@ class DashboardProjection(ActingObserver):
         else:
             self._status = cast(str, update.status)
             self._latest_error = update.error
+
+    def acting_updated(self, update: ActingUpdate) -> None:
+        """Forward the previous observer method to the explicit observer contract."""
+
+        self.on_acting_update(update)
 
 
 def _entity_view(item: JsonObject) -> EntityView:
@@ -265,5 +270,3 @@ def _changed_cells(
         if after_position is not None:
             changed.add(after_position)
     return frozenset(changed)
-
-

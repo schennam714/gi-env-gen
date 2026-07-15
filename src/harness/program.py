@@ -1,8 +1,10 @@
-"""Canonical vocabulary for builder-authored environment programs.
+"""Static typing reference for builder-authored environment-program JSON.
 
-Provider responses remain ordinary JSON. These types name that JSON contract so the
-builder schema, validator, rule runtime, and presentation adapters share one readable
-vocabulary without introducing scenario-specific mechanics.
+Provider responses and runtime values intentionally remain ordinary JSON because the
+builder chooses their names dynamically. These types give reviewers and API consumers
+one compact vocabulary; runtime validation and ``docs/environment-program.md`` remain
+the authoritative executable and normative contracts. They do not drive dispatch or
+introduce a generated-operation registry.
 """
 
 from __future__ import annotations
@@ -10,7 +12,12 @@ from __future__ import annotations
 from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 Scalar: TypeAlias = bool | int | float | str | None
-Coordinate: TypeAlias = list[int]
+
+
+class Coordinate(list[int]):
+    """JSON ``[x, y]``; validation requires exactly two integer items."""
+
+
 Direction: TypeAlias = Literal["UP", "RIGHT", "DOWN", "LEFT"]
 ParameterType: TypeAlias = Literal["direction", "entity", "number", "string"]
 
@@ -150,9 +157,16 @@ RepeatEffect = TypedDict(
 Effect: TypeAlias = NonRepeatEffect | RepeatEffect
 
 
+class EntityProperties(TypedDict):
+    """Required properties; validated programs may contain additional scalar keys."""
+
+    symbol: str
+    solid: bool
+
+
 class EntityDeclaration(TypedDict):
     id: str
-    properties: dict[str, Scalar]
+    properties: EntityProperties
 
 
 class ActionRule(TypedDict):
