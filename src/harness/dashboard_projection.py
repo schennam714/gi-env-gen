@@ -98,7 +98,7 @@ class DashboardProjection(ActingObserver):
     ) -> None:
         self._models = models
         self._environment_hash_prefix = environment.content_hash[:10]
-        self._program = cast(JsonObject, environment.program)
+        self._program = environment.program
         self._max_steps = max_steps
         self._evidence_path = str(evidence_path)
         initial = start(environment)

@@ -7,6 +7,7 @@ from typing import Any, Mapping, cast
 
 from .builder_schema import CONDITION_OPERATIONS, EFFECT_OPERATIONS
 from .model import FrozenEnvironment, JsonObject, freeze_environment
+from .program import EnvironmentProgram
 from .runtime import EffectLimitExceeded, EnvironmentProgramError, Transition, _condition, start, step
 
 
@@ -36,10 +37,10 @@ def validate_candidate(
 ) -> ValidatedCandidate | Diagnostic:
     """Validate, freeze, and replay one generated candidate without repairing it."""
 
-    diagnostic = validate_environment_program(program)
-    if diagnostic is not None:
-        return diagnostic
-    frozen = freeze_environment(program)
+    validated_program = validated_environment_program(program)
+    if isinstance(validated_program, Diagnostic):
+        return validated_program
+    frozen = freeze_environment(validated_program)
     initial = start(frozen)
     for index, failure in enumerate(program["failures"]):
         if _condition(program, initial.state, failure["when"], {}):
@@ -103,6 +104,17 @@ def validate_candidate(
         frozen,
         ValidationEvidence(tuple(dict(item) for item in solution), tuple(replay)),
     )
+
+
+def validated_environment_program(
+    program: JsonObject,
+) -> EnvironmentProgram | Diagnostic:
+    """Return the static program vocabulary only after semantic validation succeeds."""
+
+    diagnostic = validate_environment_program(program)
+    if diagnostic is not None:
+        return diagnostic
+    return cast(EnvironmentProgram, program)
 
 
 def validate_environment_program(program: JsonObject) -> Diagnostic | None:

@@ -104,7 +104,7 @@ class _TurnExecution:
 
 
 def start(environment: FrozenEnvironment) -> Transition:
-    program = cast(JsonObject, environment.program)
+    program = environment.program
     positions: dict[str, tuple[int, int] | None] = {}
     properties: dict[str, Mapping[str, Any]] = {}
     for y, row in enumerate(program["map"]):
@@ -134,7 +134,7 @@ def step(
 ) -> Transition:
     if state.status != "running":
         raise EnvironmentProgramError("cannot step a terminal runtime state")
-    program = cast(JsonObject, environment.program)
+    program = environment.program
     action = _matching_action(program, invocation)
     arguments = invocation["arguments"]
     applicable = all(

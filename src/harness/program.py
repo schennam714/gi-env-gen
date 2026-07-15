@@ -12,12 +12,7 @@ from __future__ import annotations
 from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 Scalar: TypeAlias = bool | int | float | str | None
-
-
-class Coordinate(list[int]):
-    """JSON ``[x, y]``; validation requires exactly two integer items."""
-
-
+Coordinate: TypeAlias = list[int]  # JSON [x, y]; validation requires exactly two integers.
 Direction: TypeAlias = Literal["UP", "RIGHT", "DOWN", "LEFT"]
 ParameterType: TypeAlias = Literal["direction", "entity", "number", "string"]
 
@@ -157,16 +152,12 @@ RepeatEffect = TypedDict(
 Effect: TypeAlias = NonRepeatEffect | RepeatEffect
 
 
-class EntityProperties(TypedDict):
-    """Required properties; validated programs may contain additional scalar keys."""
-
-    symbol: str
-    solid: bool
-
-
 class EntityDeclaration(TypedDict):
     id: str
-    properties: EntityProperties
+    # Validation requires string symbol and boolean solid entries. Other keys are
+    # builder-chosen scalar properties, which Python 3.11 TypedDict cannot express as
+    # required fixed keys plus arbitrary typed keys.
+    properties: dict[str, Scalar]
 
 
 class ActionRule(TypedDict):
