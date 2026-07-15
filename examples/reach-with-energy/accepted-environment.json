@@ -1,0 +1,83 @@
+{
+  "environment": {
+    "actions": [
+      {
+        "allowed_when": [],
+        "effects": [
+          {
+            "direction": "$direction",
+            "entity": "explorer",
+            "operation": "move"
+          },
+          {
+            "amount": -1,
+            "operation": "change_value",
+            "value": "energy"
+          }
+        ],
+        "name": "move",
+        "parameters": {
+          "direction": "direction"
+        }
+      }
+    ],
+    "actor": "explorer",
+    "after_action": [],
+    "failures": [
+      {
+        "description": "The explorer fails when energy reaches zero.",
+        "id": "energy_depleted",
+        "when": {
+          "comparator": "lte",
+          "expected": 0,
+          "operation": "value_compare",
+          "value": "energy"
+        }
+      }
+    ],
+    "legend": {
+      "B": {
+        "id": "beacon",
+        "properties": {
+          "solid": false,
+          "symbol": "B"
+        }
+      },
+      "E": {
+        "id": "explorer",
+        "properties": {
+          "solid": true,
+          "symbol": "E"
+        }
+      }
+    },
+    "map": [
+      "#######",
+      "#E.#.B#",
+      "#.....#",
+      "#.....#",
+      "#######"
+    ],
+    "objectives": [
+      {
+        "description": "The explorer reaches the beacon.",
+        "id": "reach_beacon",
+        "satisfied_when": {
+          "first": "explorer",
+          "operation": "at",
+          "second": "beacon"
+        }
+      }
+    ],
+    "values": {
+      "energy": 10
+    }
+  },
+  "environment_hash": "b659ece31ba1cd805f3bfcdfd7be4caff340693135f907a3af615179fe84b475",
+  "interpretation": [
+    "A small enclosed 2D grid world uses reserved # terrain for the boundary walls and one interior obstacle, and reserved . terrain for floors.",
+    "One explorer starts apart from one beacon and must navigate to the beacon.",
+    "The initial state is neither successful nor failed, and the shortest valid route will require at least five movement actions.",
+    "Energy starts at 10, decreases after every action, and reaching zero causes failure."
+  ]
+}

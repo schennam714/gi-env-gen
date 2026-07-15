@@ -1,0 +1,191 @@
+{
+  "environment_hash": "b659ece31ba1cd805f3bfcdfd7be4caff340693135f907a3af615179fe84b475",
+  "actor_model": "gpt-5-mini",
+  "final_status": "success",
+  "steps": [
+    {
+      "action": {
+        "action": "move",
+        "arguments": {
+          "direction": "RIGHT"
+        }
+      },
+      "applicable": true,
+      "events": [],
+      "objective_changes": [],
+      "resulting_state": {
+        "positions": {
+          "beacon": [
+            5,
+            1
+          ],
+          "explorer": [
+            2,
+            1
+          ]
+        },
+        "values": {
+          "energy": 9
+        },
+        "completed_objectives": [],
+        "step": 1,
+        "status": "running",
+        "failure_id": null
+      }
+    },
+    {
+      "action": {
+        "action": "move",
+        "arguments": {
+          "direction": "DOWN"
+        }
+      },
+      "applicable": true,
+      "events": [],
+      "objective_changes": [],
+      "resulting_state": {
+        "positions": {
+          "beacon": [
+            5,
+            1
+          ],
+          "explorer": [
+            2,
+            2
+          ]
+        },
+        "values": {
+          "energy": 8
+        },
+        "completed_objectives": [],
+        "step": 2,
+        "status": "running",
+        "failure_id": null
+      }
+    },
+    {
+      "action": {
+        "action": "move",
+        "arguments": {
+          "direction": "RIGHT"
+        }
+      },
+      "applicable": true,
+      "events": [],
+      "objective_changes": [],
+      "resulting_state": {
+        "positions": {
+          "beacon": [
+            5,
+            1
+          ],
+          "explorer": [
+            3,
+            2
+          ]
+        },
+        "values": {
+          "energy": 7
+        },
+        "completed_objectives": [],
+        "step": 3,
+        "status": "running",
+        "failure_id": null
+      }
+    },
+    {
+      "action": {
+        "action": "move",
+        "arguments": {
+          "direction": "RIGHT"
+        }
+      },
+      "applicable": true,
+      "events": [],
+      "objective_changes": [],
+      "resulting_state": {
+        "positions": {
+          "beacon": [
+            5,
+            1
+          ],
+          "explorer": [
+            4,
+            2
+          ]
+        },
+        "values": {
+          "energy": 6
+        },
+        "completed_objectives": [],
+        "step": 4,
+        "status": "running",
+        "failure_id": null
+      }
+    },
+    {
+      "action": {
+        "action": "move",
+        "arguments": {
+          "direction": "RIGHT"
+        }
+      },
+      "applicable": true,
+      "events": [],
+      "objective_changes": [],
+      "resulting_state": {
+        "positions": {
+          "beacon": [
+            5,
+            1
+          ],
+          "explorer": [
+            5,
+            2
+          ]
+        },
+        "values": {
+          "energy": 5
+        },
+        "completed_objectives": [],
+        "step": 5,
+        "status": "running",
+        "failure_id": null
+      }
+    },
+    {
+      "action": {
+        "action": "move",
+        "arguments": {
+          "direction": "UP"
+        }
+      },
+      "applicable": true,
+      "events": [],
+      "objective_changes": [
+        "reach_beacon"
+      ],
+      "resulting_state": {
+        "positions": {
+          "beacon": [
+            5,
+            1
+          ],
+          "explorer": [
+            5,
+            1
+          ]
+        },
+        "values": {
+          "energy": 4
+        },
+        "completed_objectives": [
+          "reach_beacon"
+        ],
+        "step": 6,
+        "status": "success",
+        "failure_id": null
+      }
+    }
+  ]
+}

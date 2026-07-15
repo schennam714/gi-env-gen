@@ -10,9 +10,6 @@ __pycache__/
 .pytest_cache/
 run-evidence/
 
-tests/
-README.md
-tickets.md
 BACKLOG.md
 CONTEXT.md
 
@@ -25,4 +22,3 @@ skills-lock.json
 
 docs/adr/
 docs/agents/
-docs/environment-program.md
