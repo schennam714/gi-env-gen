@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
-from .acting import ActingUpdate, ActingUpdates
+from .acting import ActingObserver, ActingUpdate
 from .model import FrozenEnvironment, JsonObject, RunModels
 from .runtime import EventRecord, RuntimeState, start
 
@@ -103,7 +103,7 @@ class DashboardFrame:
     evidence_path: str
 
 
-class DashboardProjection(ActingUpdates):
+class DashboardProjection(ActingObserver):
     """Read-only projection of frozen rules and deterministic acting updates."""
 
     def __init__(
@@ -165,7 +165,7 @@ class DashboardProjection(ActingUpdates):
             evidence_path=self._evidence_path,
         )
 
-    def acting_updated(self, update: ActingUpdate) -> None:
+    def on_acting_update(self, update: ActingUpdate) -> None:
         previous_map = tuple(self._observation["map"])
         previous_state = self._state
         self._observation = update.observation
@@ -199,14 +199,14 @@ class DashboardProjection(ActingUpdates):
             self._latest_error = update.error
 
 
-class LiveDashboard(ActingUpdates):
+class LiveDashboard(ActingObserver):
     def __init__(self, projection: DashboardProjection, live: Live, console: Console) -> None:
         self._projection = projection
         self._live = live
         self._console = console
 
-    def acting_updated(self, update: ActingUpdate) -> None:
-        self._projection.acting_updated(update)
+    def on_acting_update(self, update: ActingUpdate) -> None:
+        self._projection.on_acting_update(update)
         self._live.update(
             render_dashboard(
                 self._projection.frame,

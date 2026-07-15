@@ -11,7 +11,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from .acting import ActingUpdates, play
+from .acting import ActingObserver, play
 from .builder import (
     AcceptedBuild,
     BuildResult,
@@ -116,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_steps=args.max_steps,
             evidence_path=evidence_dir,
         )
-        updates: ActingUpdates = projection
+        updates: ActingObserver = projection
         if live is not None:
             live.update(
                 render_dashboard(

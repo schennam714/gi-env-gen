@@ -38,7 +38,7 @@ ActingUpdatePhase: TypeAlias = Literal[
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ActingUpdate:
     phase: ActingUpdatePhase
     observation: JsonObject
@@ -50,8 +50,8 @@ class ActingUpdate:
     status: ActingStatus | None = None
 
 
-class ActingUpdates(Protocol):
-    def acting_updated(self, update: ActingUpdate) -> None: ...
+class ActingObserver(Protocol):
+    def on_acting_update(self, update: ActingUpdate) -> None: ...
 
 
 class UnusableActorResponse(ValueError):
@@ -84,13 +84,22 @@ class ActingResult:
     reason: str | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class _ActionRequestResult:
+    response_attempts: tuple[ActorResponseAttempt, ...]
+    invocation: JsonObject | None
+    transition: Transition | None
+    failure_status: ActingStatus | None = None
+    reason: str | None = None
+
+
 def play(
     original_prompt: str,
     accepted: AcceptedBuild,
     provider: ActingProvider,
     *,
     max_steps: int,
-    updates: ActingUpdates | None = None,
+    updates: ActingObserver | None = None,
 ) -> ActingResult:
     if max_steps < 1:
         raise ValueError("max_steps must be positive")
@@ -106,173 +115,40 @@ def play(
                 "steps_remaining": max_steps - transition.state.step,
             }
         )
-        response_attempts: list[ActorResponseAttempt] = []
-        invocation: JsonObject | None = None
-        next_transition: Transition | None = None
-        for _ in range(3):
-            attempt_observation = copy.deepcopy(observation)
-            if response_attempts:
-                previous_attempt = response_attempts[-1]
-                attempt_observation["formatting_recovery"] = {
-                    "previous_response": copy.deepcopy(previous_attempt.response),
-                    "error": previous_attempt.error,
-                }
-            _publish(
-                updates,
-                ActingUpdate(
-                    "before_actor_request",
-                    copy.deepcopy(attempt_observation),
-                    transition.state,
-                ),
-            )
-            try:
-                invocation = provider.choose_action(copy.deepcopy(attempt_observation))
-            except UnusableActorResponse as error:
-                response_attempts.append(
-                    ActorResponseAttempt(
-                        attempt_observation,
-                        copy.deepcopy(error.response),
-                        str(error),
-                    )
-                )
-                _publish(
-                    updates,
-                    ActingUpdate(
-                        "after_response_attempt",
-                        copy.deepcopy(attempt_observation),
-                        transition.state,
-                        copy.deepcopy(error.response),
-                        str(error),
-                    ),
-                )
-                continue
-            except Exception as error:
-                response_attempts.append(
-                    ActorResponseAttempt(attempt_observation, None, str(error))
-                )
-                acting_steps.append(
-                    ActingStep(
-                        copy.deepcopy(observation),
-                        tuple(response_attempts),
-                        None,
-                        None,
-                        transition.state,
-                    )
-                )
-                result = ActingResult(
-                    "provider_failure",
-                    tuple(transitions),
-                    tuple(acting_steps),
-                    str(error),
-                )
-                _publish(
-                    updates,
-                    ActingUpdate(
-                        "after_response_attempt",
-                        copy.deepcopy(attempt_observation),
-                        transition.state,
-                        error=str(error),
-                    ),
-                )
-                _publish_termination(updates, transition, result)
-                return result
-            _publish(
-                updates,
-                ActingUpdate(
-                    "after_response_attempt",
-                    copy.deepcopy(attempt_observation),
-                    transition.state,
-                    copy.deepcopy(invocation),
-                ),
-            )
-            try:
-                next_transition = step(accepted.environment, transition.state, invocation)
-            except UnusableActorOutputError as error:
-                response_attempts.append(
-                    ActorResponseAttempt(
-                        attempt_observation,
-                        copy.deepcopy(invocation),
-                        str(error),
-                    )
-                )
-                _publish(
-                    updates,
-                    ActingUpdate(
-                        "response_error",
-                        copy.deepcopy(attempt_observation),
-                        transition.state,
-                        copy.deepcopy(invocation),
-                        str(error),
-                    ),
-                )
-                continue
-            except EnvironmentProgramError as error:
-                response_attempts.append(
-                    ActorResponseAttempt(
-                        attempt_observation,
-                        copy.deepcopy(invocation),
-                        str(error),
-                    )
-                )
-                acting_steps.append(
-                    ActingStep(
-                        copy.deepcopy(observation),
-                        tuple(response_attempts),
-                        copy.deepcopy(invocation),
-                        None,
-                        transition.state,
-                    )
-                )
-                result = ActingResult(
-                    "invalid_generated_program",
-                    tuple(transitions),
-                    tuple(acting_steps),
-                    str(error),
-                )
-                _publish(
-                    updates,
-                    ActingUpdate(
-                        "response_error",
-                        copy.deepcopy(attempt_observation),
-                        transition.state,
-                        copy.deepcopy(invocation),
-                        str(error),
-                        action=copy.deepcopy(invocation),
-                    ),
-                )
-                _publish_termination(updates, transition, result)
-                return result
-            response_attempts.append(
-                ActorResponseAttempt(
-                    attempt_observation,
-                    copy.deepcopy(invocation),
-                )
-            )
-            break
-        if next_transition is None:
+        action_request = _request_action(
+            accepted,
+            transition,
+            observation,
+            provider,
+            updates,
+        )
+        if action_request.transition is None:
+            assert action_request.failure_status is not None
             acting_steps.append(
                 ActingStep(
                     copy.deepcopy(observation),
-                    tuple(response_attempts),
-                    None,
+                    action_request.response_attempts,
+                    copy.deepcopy(action_request.invocation),
                     None,
                     transition.state,
                 )
             )
             result = ActingResult(
-                "unusable_actor_output",
+                action_request.failure_status,
                 tuple(transitions),
                 tuple(acting_steps),
-                response_attempts[-1].error,
+                action_request.reason,
             )
             _publish_termination(updates, transition, result)
             return result
-        transition = next_transition
+        invocation = action_request.invocation
+        assert invocation is not None
+        transition = action_request.transition
         transitions.append(transition)
         acting_steps.append(
             ActingStep(
                 copy.deepcopy(observation),
-                tuple(response_attempts),
+                action_request.response_attempts,
                 copy.deepcopy(invocation),
                 transition,
                 transition.state,
@@ -281,9 +157,9 @@ def play(
         _publish(
             updates,
             ActingUpdate(
-                "after_transition",
-                copy.deepcopy(transition.observation),
-                transition.state,
+                phase="after_transition",
+                observation=copy.deepcopy(transition.observation),
+                state=transition.state,
                 action=copy.deepcopy(invocation),
                 transition=transition,
             ),
@@ -305,26 +181,162 @@ def play(
     return result
 
 
-def _publish(updates: ActingUpdates | None, update: ActingUpdate) -> None:
+def _request_action(
+    accepted: AcceptedBuild,
+    current: Transition,
+    observation: JsonObject,
+    provider: ActingProvider,
+    updates: ActingObserver | None,
+) -> _ActionRequestResult:
+    response_attempts: list[ActorResponseAttempt] = []
+    for _ in range(3):
+        attempt_observation = copy.deepcopy(observation)
+        if response_attempts:
+            previous_attempt = response_attempts[-1]
+            attempt_observation["formatting_recovery"] = {
+                "previous_response": copy.deepcopy(previous_attempt.response),
+                "error": previous_attempt.error,
+            }
+        _publish(
+            updates,
+            ActingUpdate(
+                phase="before_actor_request",
+                observation=copy.deepcopy(attempt_observation),
+                state=current.state,
+            ),
+        )
+        try:
+            invocation = provider.choose_action(copy.deepcopy(attempt_observation))
+        except UnusableActorResponse as error:
+            response_attempts.append(
+                ActorResponseAttempt(
+                    attempt_observation,
+                    copy.deepcopy(error.response),
+                    str(error),
+                )
+            )
+            _publish(
+                updates,
+                ActingUpdate(
+                    phase="after_response_attempt",
+                    observation=copy.deepcopy(attempt_observation),
+                    state=current.state,
+                    response=copy.deepcopy(error.response),
+                    error=str(error),
+                ),
+            )
+            continue
+        except Exception as error:
+            response_attempts.append(ActorResponseAttempt(attempt_observation, None, str(error)))
+            _publish(
+                updates,
+                ActingUpdate(
+                    phase="after_response_attempt",
+                    observation=copy.deepcopy(attempt_observation),
+                    state=current.state,
+                    error=str(error),
+                ),
+            )
+            return _ActionRequestResult(
+                response_attempts=tuple(response_attempts),
+                invocation=None,
+                transition=None,
+                failure_status="provider_failure",
+                reason=str(error),
+            )
+        _publish(
+            updates,
+            ActingUpdate(
+                phase="after_response_attempt",
+                observation=copy.deepcopy(attempt_observation),
+                state=current.state,
+                response=copy.deepcopy(invocation),
+            ),
+        )
+        try:
+            next_transition = step(accepted.environment, current.state, invocation)
+        except UnusableActorOutputError as error:
+            response_attempts.append(
+                ActorResponseAttempt(
+                    attempt_observation,
+                    copy.deepcopy(invocation),
+                    str(error),
+                )
+            )
+            _publish(
+                updates,
+                ActingUpdate(
+                    phase="response_error",
+                    observation=copy.deepcopy(attempt_observation),
+                    state=current.state,
+                    response=copy.deepcopy(invocation),
+                    error=str(error),
+                ),
+            )
+            continue
+        except EnvironmentProgramError as error:
+            response_attempts.append(
+                ActorResponseAttempt(
+                    attempt_observation,
+                    copy.deepcopy(invocation),
+                    str(error),
+                )
+            )
+            _publish(
+                updates,
+                ActingUpdate(
+                    phase="response_error",
+                    observation=copy.deepcopy(attempt_observation),
+                    state=current.state,
+                    response=copy.deepcopy(invocation),
+                    error=str(error),
+                    action=copy.deepcopy(invocation),
+                ),
+            )
+            return _ActionRequestResult(
+                response_attempts=tuple(response_attempts),
+                invocation=copy.deepcopy(invocation),
+                transition=None,
+                failure_status="invalid_generated_program",
+                reason=str(error),
+            )
+        response_attempts.append(
+            ActorResponseAttempt(attempt_observation, copy.deepcopy(invocation))
+        )
+        return _ActionRequestResult(
+            response_attempts=tuple(response_attempts),
+            invocation=copy.deepcopy(invocation),
+            transition=next_transition,
+        )
+    return _ActionRequestResult(
+        response_attempts=tuple(response_attempts),
+        invocation=None,
+        transition=None,
+        failure_status="unusable_actor_output",
+        reason=response_attempts[-1].error,
+    )
+
+
+def _publish(updates: ActingObserver | None, update: ActingUpdate) -> None:
     if updates is not None:
         try:
-            updates.acting_updated(copy.deepcopy(update))
+            updates.on_acting_update(copy.deepcopy(update))
         except Exception:
             # A read-only projection cannot alter acting or provider-call semantics.
             return
 
 
 def _publish_termination(
-    updates: ActingUpdates | None,
+    updates: ActingObserver | None,
     transition: Transition,
     result: ActingResult,
 ) -> None:
     _publish(
         updates,
         ActingUpdate(
-            "termination",
-            copy.deepcopy(transition.observation),
-            transition.state,
+            phase="termination",
+            observation=copy.deepcopy(transition.observation),
+            state=transition.state,
             error=result.reason,
             status=result.status,
         ),
