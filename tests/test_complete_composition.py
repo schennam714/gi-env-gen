@@ -11,11 +11,10 @@ from .test_builder import FakeProvider
 
 
 COMPOSITION_PROMPT = (
-    "Create a grid environment where an explorer must claim a token, use it to unseal "
-    "a barrier, and then reach a beacon. Include an action that traverses open cells, "
-    "limited charge consumed after every action, and a wanderer that moves toward the "
-    "explorer after every action. Fail if charge is depleted after the token is claimed "
-    "or if the wanderer intercepts the explorer."
+    "Create a grid environment where an explorer must claim a token, unseal a barrier, "
+    "then reach a beacon with a multi-cell traversal action. Each action consumes charge "
+    "and moves a wanderer toward the explorer; fail if charge runs out after the token "
+    "is claimed or the wanderer catches the explorer."
 )
 
 
