@@ -10,6 +10,15 @@ from .test_acting import FakeActor
 from .test_builder import FakeProvider
 
 
+COMPOSITION_PROMPT = (
+    "Create a grid environment where an explorer must claim a token, use it to unseal "
+    "a barrier, and then reach a beacon. Include an action that traverses open cells, "
+    "limited charge consumed after every action, and a wanderer that moves toward the "
+    "explorer after every action. Fail if charge is depleted after the token is claimed "
+    "or if the wanderer intercepts the explorer."
+)
+
+
 def mixed_build_response() -> dict[str, Any]:
     """A provider-fake complete composition, not a user-facing mechanic template."""
     return {
@@ -244,7 +253,7 @@ def mixed_build_response() -> dict[str, Any]:
 
 def test_mixed_generated_program_replays_and_independent_actor_succeeds() -> None:
     response = mixed_build_response()
-    accepted = build("Compose one generated environment", FakeProvider(response))
+    accepted = build(COMPOSITION_PROMPT, FakeProvider(response))
 
     assert isinstance(accepted, AcceptedBuild)
     assert accepted.validation.replay[-1].state.status == "success"
@@ -255,7 +264,7 @@ def test_mixed_generated_program_replays_and_independent_actor_succeeds() -> Non
     )
     actor = FakeActor(deepcopy(response["solution"]))
 
-    result = play("Compose one generated environment", accepted, actor, max_steps=6)
+    result = play(COMPOSITION_PROMPT, accepted, actor, max_steps=6)
 
     assert result.status == "success"
     assert result.transitions[-1].state.positions["token"] is None
@@ -284,7 +293,7 @@ def test_mixed_generated_program_replays_and_independent_actor_succeeds() -> Non
 
 def test_same_validation_passed_environment_can_end_in_generated_acting_failure() -> None:
     response = mixed_build_response()
-    accepted = build("Compose one generated environment", FakeProvider(response))
+    accepted = build(COMPOSITION_PROMPT, FakeProvider(response))
     assert isinstance(accepted, AcceptedBuild)
     actor = FakeActor(
         [
@@ -296,7 +305,7 @@ def test_same_validation_passed_environment_can_end_in_generated_acting_failure(
         ]
     )
 
-    result = play("Compose one generated environment", accepted, actor, max_steps=5)
+    result = play(COMPOSITION_PROMPT, accepted, actor, max_steps=5)
 
     assert result.status == "generated_failure"
     assert result.transitions[-1].state.failure_id == "charge_depleted_after_claim"
@@ -310,7 +319,7 @@ def test_complete_program_rejects_an_empty_action_name_before_replay() -> None:
     response["solution"][1]["action"] = ""
 
     result = build(
-        "Compose one generated environment",
+        COMPOSITION_PROMPT,
         FakeProvider(*([response] * 5)),
     )
 
@@ -347,7 +356,7 @@ def test_complete_program_rejects_duplicate_ids_before_replay(
         environment["failures"][1]["id"] = environment["failures"][0]["id"]
 
     result = build(
-        "Compose one generated environment",
+        COMPOSITION_PROMPT,
         FakeProvider(*([response] * 5)),
     )
 
@@ -391,7 +400,7 @@ def test_complete_program_rejects_empty_ids_before_replay(
         environment["failures"][0]["id"] = ""
 
     result = build(
-        "Compose one generated environment",
+        COMPOSITION_PROMPT,
         FakeProvider(*([response] * 5)),
     )
 
@@ -431,7 +440,7 @@ def test_event_operations_are_fully_validated_before_replay(
         response["environment"]["actions"][1]["effects"][2]["event"] = ""
 
     result = build(
-        "Compose one generated environment",
+        COMPOSITION_PROMPT,
         FakeProvider(*([response] * 5)),
     )
 

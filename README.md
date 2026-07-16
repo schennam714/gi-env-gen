@@ -96,6 +96,25 @@ The complete rule-language contract is in
 
 ## One environment, top to bottom
 
+Steps 1–6 trace the hand-authored
+[`mixed_build_response()` composition fixture](tests/test_complete_composition.py),
+not the recorded [`examples/reach-with-energy`](examples/reach-with-energy/) run. The
+fixture uses a fake provider so the offline suite can prove a broad cross-section of
+the rule language and the complete execution pipeline without making an API call. Its
+exact source prompt is:
+
+> Create a grid environment where an explorer must claim a token, use it to unseal a
+> barrier, and then reach a beacon. Include an action that traverses open cells, limited
+> charge consumed after every action, and a wanderer that moves toward the explorer
+> after every action. Fail if charge is depleted after the token is claimed or if the
+> wanderer intercepts the explorer.
+
+The fixture response is written by hand rather than captured from the builder. It is
+used here because one small environment exercises collection, custom properties,
+repeated movement, automatic movement, numeric state, events, ordered objectives, and
+failures together. The recorded example linked above is the evidence for an actual
+provider-generated environment.
+
 ```text
 LLM AUTHORING
 natural-language prompt
